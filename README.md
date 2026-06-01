@@ -96,19 +96,18 @@ Browser                         Server                              Google Gemin
    │<──────────────────────────────│                                       │
 ```
 
-Multipart uploads are parsed with [Busboy](https://github.com/mscdex/busboy). Each file field (`product`, `mockup`) is buffered in memory with a 20 MB size limit enforced during streaming.
+Multipart uploads are parsed with the Web `FormData` API. Each file field (`product`, `mockup`) is buffered in memory with a 20 MB size limit.
 
 ---
 
 ## Architecture
 
-Mockuper is a single-page React app backed by one API route. The same core logic (`lib/mockup.ts`, `lib/parse-multipart.ts`) runs in two environments:
+Mockuper is a single-page React app served by one **Bun** process (`server.ts`). The same server handles the API, frontend assets, and hot reload in development.
 
-| Environment | Frontend | API |
-|-------------|----------|-----|
-| **Local dev** | Vite dev middleware via Bun + Express (`server.ts`) | `POST /api/process/mockup` on Express |
-| **Production (Vercel)** | Static files from `dist/` | Serverless function at `api/process/mockup.ts` |
-| **Self-hosted** | Static files from `dist/` via Express | Same Express route as dev |
+| Mode | Frontend | API |
+|------|----------|-----|
+| **Development** (`bun run dev`) | Bun HTML bundler with HMR from `index.html` | `POST /api/process/mockup` on `Bun.serve` |
+| **Production** (`bun run start`) | Static files from `dist/` (built with `bun build`) | Same route on `Bun.serve` |
 
 ```mermaid
 flowchart TB
@@ -137,7 +136,7 @@ flowchart TB
   Pipeline -->|JSON response| UI
 ```
 
-On Vercel, non-API routes are rewritten to `index.html` for client-side routing. The mockup function is configured with **300s max duration** and **1024 MB memory** in `vercel.json`.
+Mockup generation can take 1–3 minutes, so the server must run as a long-lived process (not a short-lived serverless function).
 
 ---
 
@@ -149,26 +148,22 @@ On Vercel, non-API routes are rewritten to `index.html` for client-side routing.
 |------------|------|
 | **React 19** | UI components and state |
 | **TypeScript** | Type safety across frontend and backend |
-| **Vite 6** | Dev server, HMR, and production bundling |
-| **Tailwind CSS 4** | Styling (`@tailwindcss/vite` plugin) |
-| **Motion** | Modal and transition animations |
+| **Biome** | Linting, formatting, and import organization |
+| **Bun** | HTTP server, dev bundler/HMR, and production frontend build |
+| **Tailwind CSS 4** | Styling via `@tailwindcss/cli` (scans components, outputs compiled CSS) |
 | **Lucide React** | Icons |
 
 ### Backend
 
 | Technology | Role |
 |------------|------|
-| **Bun** | JavaScript runtime for local dev and production server |
-| **Express 4** | HTTP server, static file serving, API route in dev/self-host |
-| **Busboy** | Multipart form parsing for image uploads |
+| **Bun** | HTTP server (`Bun.serve`), dev bundler/HMR, and runtime |
 | **@google/genai** | Official Google Gemini SDK |
-| **@vercel/node** | Vercel serverless function types and runtime adapter |
 
 ### Infrastructure
 
 | Technology | Role |
 |------------|------|
-| **Vercel** | Recommended production hosting (static SPA + serverless API) |
 | **Google Gemini API** | Text analysis (Bria instruction) and image generation (Nano Banana 2) |
 
 ---
@@ -177,7 +172,7 @@ On Vercel, non-API routes are rewritten to `index.html` for client-side routing.
 
 ### Runtime
 
-- **[Bun](https://bun.sh)** — required for local development and the self-hosted production server (`bun run dev`, `bun run start`).
+- **[Bun](https://bun.sh)** — required for development and production (`bun run dev`, `bun run start`).
 
 ### API access
 
@@ -185,15 +180,6 @@ On Vercel, non-API routes are rewritten to `index.html` for client-side routing.
 - The key must have access to:
   - `gemini-2.5-flash` (instruction generation)
   - `gemini-3.1-flash-image` and/or `gemini-2.5-flash-image` (image generation)
-
-### Production hosting (Vercel)
-
-- **Vercel Pro plan** (or equivalent) is effectively required for production use. Mockup generation takes 1–3 minutes, but Vercel Hobby limits serverless functions to **10 seconds**. This project configures **300 seconds** (`maxDuration: 300`) in `vercel.json` and `api/process/mockup.ts`, which needs [Vercel Pro](https://vercel.com/docs/functions/runtimes#max-duration).
-- **1024 MB function memory** is configured for the image processing workload.
-
-### Optional
-
-- **[Vercel CLI](https://vercel.com/docs/cli)** — for `bun run vercel:dev` to preview the Vercel routing and serverless function locally.
 
 ### Upload constraints
 
@@ -231,17 +217,20 @@ APP_URL="http://localhost:3000"
 bun run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The Bun server starts Express on port 3000, mounts Vite in middleware mode for hot reload, and registers the mockup API route.
+Open [http://localhost:3000](http://localhost:3000). Bun serves the React app with HMR and the mockup API on port 3000.
 
 ### Available scripts
 
 | Command | Description |
 |---------|-------------|
-| `bun run dev` | Development server with hot reload (port 3000) |
-| `bun run build` | Build the React frontend to `dist/` |
+| `bun run dev` | Dev server + Tailwind CSS watch (port 3000) |
+| `bun run build` | Build the React frontend to `dist/` with Bun |
 | `bun run start` | Production server: serves `dist/` + API (run `build` first) |
-| `bun run vercel:dev` | Local Vercel preview (serverless function + static build) |
-| `bun run lint` | Typecheck with `tsc --noEmit` |
+| `bun run lint` | Lint and format check with Biome |
+| `bun run lint:fix` | Auto-fix lint issues and format with Biome |
+| `bun run format` | Format all files with Biome |
+| `bun run typecheck` | Typecheck with `tsc --noEmit` |
+| `bun run check` | Run Biome and TypeScript checks |
 | `bun run clean` | Remove the `dist/` directory |
 
 ---
@@ -284,7 +273,7 @@ Generates a product mockup from two uploaded images.
 | Status | Condition |
 |--------|-----------|
 | `400` | Missing `product` or `mockup` field |
-| `405` | Method other than POST (Vercel handler only) |
+| `405` | Method other than POST |
 | `500` | Gemini API failure, file too large, instruction parse error, or other server error |
 
 Error body:
@@ -299,37 +288,17 @@ Error body:
 
 ## Deployment
 
-### Vercel (recommended)
-
-1. Push the repository to GitHub (or connect another Git provider).
-2. Import the project at [vercel.com/new](https://vercel.com/new).
-3. Vercel detects settings from `vercel.json`:
-   - **Install:** `bun install`
-   - **Build:** `bun run build`
-   - **Output:** `dist/`
-4. Add environment variables in the Vercel dashboard:
-   - `GEMINI_API_KEY` (required)
-   - `APP_URL` (your production URL, e.g. `https://mockuper.vercel.app`)
-5. Deploy.
-
-Ensure your Vercel plan supports the 300s function timeout configured for `api/process/mockup.ts`.
-
-To test locally with Vercel routing:
+Build and run the Bun production server on any host that supports long-running processes (Fly.io, Railway, a VPS, etc.):
 
 ```bash
-bun run vercel:dev
-```
-
-### Self-hosted
-
-Build and run the Bun production server:
-
-```bash
+bun install
 bun run build
 NODE_ENV=production bun run start
 ```
 
-This serves the static frontend from `dist/` and handles `/api/process/mockup` on the same port (3000). No 10-second timeout applies—you control the server runtime.
+Set `GEMINI_API_KEY` (and optionally `PORT`, `APP_URL`) in the environment. The server listens on port **3000** by default.
+
+Mockup generation takes 1–3 minutes, so avoid platforms with hard serverless timeouts. A single Bun process serves both the static frontend and the API with no timeout limit you don't configure yourself.
 
 ---
 
@@ -337,34 +306,29 @@ This serves the static frontend from `dist/` and handles `/api/process/mockup` o
 
 ```
 mockuper/
-├── api/
-│   └── process/
-│       └── mockup.ts       # Vercel serverless handler
 ├── lib/
 │   ├── mockup.ts           # Bria instruction + Nano Banana pipeline
-│   └── parse-multipart.ts  # Shared multipart parser (Express + Vercel)
+│   ├── parse-multipart.ts  # Multipart form parsing
+│   └── handle-mockup.ts    # API route handler
 ├── src/
-│   ├── App.tsx             # Main UI: uploads, generation, results
+│   ├── app.tsx             # Main UI: uploads, generation, results
 │   ├── main.tsx            # React entry point
-│   ├── index.css           # Tailwind imports and global styles
+│   ├── tailwind.css        # Tailwind source (@import, @theme, keyframes)
+│   ├── app.css             # Generated Tailwind output (gitignored)
 │   └── types.ts            # Frontend TypeScript types
-├── server.ts               # Bun + Express dev/production server
-├── vite.config.ts          # Vite + React + Tailwind configuration
-├── vercel.json             # Vercel build, rewrites, function config
+├── server.ts               # Bun.serve — API + frontend (dev and production)
+├── biome.json              # Biome lint and format configuration
 ├── metadata.json           # App metadata (name, description)
 ├── .env.example            # Environment variable template
 └── package.json
 ```
-
-**Shared logic:** `lib/mockup.ts` and `lib/parse-multipart.ts` are imported by both `server.ts` (local/self-hosted) and `api/process/mockup.ts` (Vercel), so behavior is identical across environments.
 
 ---
 
 ## Limitations
 
 - **Generation time:** Two sequential Gemini calls typically take 1–3 minutes. The UI shows a loading state and elapsed timer; there is no streaming or partial results.
-- **Vercel Hobby timeout:** The 10-second Hobby limit will cause timeouts in production unless you upgrade to Pro or self-host.
-- **In-memory uploads:** Images are fully buffered in server memory (up to 20 MB each). Very large batches or concurrent requests increase memory pressure on serverless functions.
+- **In-memory uploads:** Images are fully buffered in server memory (up to 20 MB each). High concurrency increases memory pressure.
 - **Model availability:** Image generation depends on Gemini model access. If `gemini-3.1-flash-image` is unavailable, the app falls back to `gemini-2.5-flash-image`; if both fail, the request returns a 500 error.
 - **No persistence:** Generated images are returned inline and not stored. Refreshing the page clears the result unless the user downloads it.
 - **No authentication:** The API is open to anyone who can reach the server. Add auth or rate limiting before exposing a public deployment.

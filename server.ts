@@ -1,52 +1,51 @@
-import express from "express";
-import path from "path";
-import { createServer as createViteServer } from "vite";
-import { generateMockup } from "./lib/mockup.js";
-import { parseMockupMultipart } from "./lib/parse-multipart.js";
+import index from "./index.html";
+import { handleMockupRequest } from "./lib/handle-mockup.js";
 
-const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+const isDev = process.env.NODE_ENV !== "production";
 
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+const shared = {
+  port: PORT,
+  hostname: "0.0.0.0" as const,
+  routes: {
+    "/api/process/mockup": {
+      POST: handleMockupRequest,
+    },
+  },
+};
 
-app.post("/api/process/mockup", async (req, res) => {
-  try {
-    const { product, mockup } = await parseMockupMultipart(req);
+const server = isDev
+  ? Bun.serve({
+      ...shared,
+      development: {
+        hmr: process.env.DISABLE_HMR !== "true",
+        console: true,
+      },
+      routes: {
+        ...shared.routes,
+        "/": index,
+      },
+      fetch() {
+        return new Response("Not Found", { status: 404 });
+      },
+    })
+  : Bun.serve({
+      ...shared,
+      development: false,
+      async fetch(req) {
+        const url = new URL(req.url);
+        const distFile = Bun.file(`./dist${url.pathname}`);
 
-    if (!product || !mockup) {
-      res.status(400).json({ error: "Missing required product or mockup files." });
-      return;
-    }
+        if (url.pathname !== "/" && (await distFile.exists())) {
+          return new Response(distFile);
+        }
 
-    const { image, instruction } = await generateMockup(product, mockup);
-    res.json({ image, instruction });
-  } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : "Failed to generate mockup";
-    console.error("Mockup processing error:", error);
-    res.status(500).json({ error: message });
-  }
-});
+        if (req.method === "GET") {
+          return new Response(Bun.file("./dist/index.html"));
+        }
 
-async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
+        return new Response("Not Found", { status: 404 });
+      },
     });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (_req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[OK] Server listening on http://localhost:${PORT}`);
-  });
-}
-
-startServer();
+console.log(`[OK] Server listening on ${server.url}`);

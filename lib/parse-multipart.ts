@@ -1,5 +1,3 @@
-import Busboy from "busboy";
-import type { IncomingMessage } from "http";
 import type { UploadFile } from "./mockup.js";
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
@@ -9,50 +7,31 @@ export interface MockupUploadFields {
   mockup?: UploadFile;
 }
 
-export function parseMockupMultipart(
-  req: IncomingMessage
-): Promise<MockupUploadFields> {
-  return new Promise((resolve, reject) => {
-    const files: MockupUploadFields = {};
+async function fileToUpload(file: File): Promise<UploadFile> {
+  if (file.size > MAX_FILE_SIZE) {
+    throw new Error("File exceeds 20MB limit");
+  }
 
-    const busboy = Busboy({
-      headers: req.headers,
-      limits: { fileSize: MAX_FILE_SIZE },
-    });
+  const buffer = Buffer.from(await file.arrayBuffer());
+  return {
+    buffer,
+    mimetype: file.type || "application/octet-stream",
+  };
+}
 
-    busboy.on(
-      "file",
-      (
-        name: string,
-        stream: NodeJS.ReadableStream,
-        info: { mimeType: string }
-      ) => {
-        const chunks: Buffer[] = [];
-        let size = 0;
+export async function parseMockupMultipart(req: Request): Promise<MockupUploadFields> {
+  const formData = await req.formData();
+  const files: MockupUploadFields = {};
 
-        stream.on("data", (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > MAX_FILE_SIZE) {
-            reject(new Error("File exceeds 20MB limit"));
-            stream.resume();
-            return;
-          }
-          chunks.push(chunk);
-        });
+  const product = formData.get("product");
+  if (product instanceof File && product.size > 0) {
+    files.product = await fileToUpload(product);
+  }
 
-        stream.on("end", () => {
-          if (name === "product" || name === "mockup") {
-            files[name] = {
-              buffer: Buffer.concat(chunks),
-              mimetype: info.mimeType || "application/octet-stream",
-            };
-          }
-        });
-      }
-    );
+  const mockup = formData.get("mockup");
+  if (mockup instanceof File && mockup.size > 0) {
+    files.mockup = await fileToUpload(mockup);
+  }
 
-    busboy.on("finish", () => resolve(files));
-    busboy.on("error", reject);
-    req.pipe(busboy);
-  });
+  return files;
 }

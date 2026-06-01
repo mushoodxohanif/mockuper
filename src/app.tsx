@@ -1,19 +1,18 @@
-import { useState, useRef, type DragEvent, type RefObject, type ReactNode } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import {
-  Upload,
-  Trash2,
-  Play,
-  CheckCircle,
   AlertCircle,
-  Sparkles,
+  CheckCircle,
   Clock,
   Download,
-  Maximize2,
   FileImage,
   Info,
+  Maximize2,
+  Play,
+  Sparkles,
+  Trash2,
+  Upload,
 } from "lucide-react";
-import { MockupResult } from "./types";
+import { type DragEvent, type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
+import type { MockupResult } from "./types";
 
 export default function App() {
   const [productFile, setProductFile] = useState<File | null>(null);
@@ -29,6 +28,37 @@ export default function App() {
   });
   const [result, setResult] = useState<MockupResult>(emptyResult);
   const [modalImage, setModalImage] = useState<string | null>(null);
+  const [modalClosing, setModalClosing] = useState(false);
+
+  const closeModal = () => {
+    if (!modalImage || modalClosing) {
+      return;
+    }
+    setModalClosing(true);
+    window.setTimeout(() => {
+      setModalImage(null);
+      setModalClosing(false);
+    }, 200);
+  };
+
+  useEffect(() => {
+    if (!modalImage) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !modalClosing) {
+        setModalClosing(true);
+        window.setTimeout(() => {
+          setModalImage(null);
+          setModalClosing(false);
+        }, 200);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [modalImage, modalClosing]);
 
   const productInputRef = useRef<HTMLInputElement>(null);
   const mockupInputRef = useRef<HTMLInputElement>(null);
@@ -36,7 +66,9 @@ export default function App() {
   const [dragActiveMockup, setDragActiveMockup] = useState(false);
 
   const handleProductUpload = (file: File) => {
-    if (!file.type.startsWith("image/")) return;
+    if (!file.type.startsWith("image/")) {
+      return;
+    }
     setProductFile(file);
     const reader = new FileReader();
     reader.onload = () => setProductPreview(reader.result as string);
@@ -45,7 +77,9 @@ export default function App() {
   };
 
   const handleMockupUpload = (file: File) => {
-    if (!file.type.startsWith("image/")) return;
+    if (!file.type.startsWith("image/")) {
+      return;
+    }
     setMockupFile(file);
     const reader = new FileReader();
     reader.onload = () => {
@@ -58,17 +92,23 @@ export default function App() {
   const clearProduct = () => {
     setProductFile(null);
     setProductPreview(null);
-    if (productInputRef.current) productInputRef.current.value = "";
+    if (productInputRef.current) {
+      productInputRef.current.value = "";
+    }
   };
 
   const clearMockup = () => {
     setMockupFile(null);
     setMockupPreview(null);
-    if (mockupInputRef.current) mockupInputRef.current.value = "";
+    if (mockupInputRef.current) {
+      mockupInputRef.current.value = "";
+    }
   };
 
   const generateMockup = async () => {
-    if (!productFile || !mockupFile) return;
+    if (!productFile || !mockupFile) {
+      return;
+    }
     const startTime = Date.now();
     setResult({ ...emptyResult(), loading: true, elapsedTime: 0 });
 
@@ -105,12 +145,13 @@ export default function App() {
         elapsedTime: finalTime,
         instruction: data.instruction ?? null,
       });
-    } catch (e: any) {
+    } catch (error) {
       clearInterval(interval);
       const finalTime = Number(((Date.now() - startTime) / 1000).toFixed(1));
+      const message = error.message ?? "Failed to generate mockup.";
       setResult({
         ...emptyResult(),
-        error: e.message || "Failed to generate mockup.",
+        error: message,
         elapsedTime: finalTime,
       });
     }
@@ -146,8 +187,9 @@ export default function App() {
             Swap the dummy product for your real product
           </h2>
           <p className="text-xs sm:text-sm text-slate-300 leading-relaxed mt-3 max-w-2xl">
-            Upload your product and a mockup scene. We generate a detailed Bria instruction from both images,
-            then run Nano Banana 2 with that prompt — the same flow as gemini.google.com.
+            Upload your product and a mockup scene. We generate a detailed Bria instruction from
+            both images, then run Nano Banana 2 with that prompt — the same flow as
+            gemini.google.com.
           </p>
         </section>
 
@@ -158,9 +200,15 @@ export default function App() {
             preview={productPreview}
             file={productFile}
             dragActive={dragActiveProduct}
-            onDragOver={(e) => { e.preventDefault(); setDragActiveProduct(true); }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragActiveProduct(true);
+            }}
             onDragLeave={() => setDragActiveProduct(false)}
-            onDrop={(file) => { setDragActiveProduct(false); handleProductUpload(file); }}
+            onDrop={(file) => {
+              setDragActiveProduct(false);
+              handleProductUpload(file);
+            }}
             onBrowse={() => productInputRef.current?.click()}
             onClear={clearProduct}
             inputRef={productInputRef}
@@ -174,9 +222,15 @@ export default function App() {
             preview={mockupPreview}
             file={mockupFile}
             dragActive={dragActiveMockup}
-            onDragOver={(e) => { e.preventDefault(); setDragActiveMockup(true); }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragActiveMockup(true);
+            }}
             onDragLeave={() => setDragActiveMockup(false)}
-            onDrop={(file) => { setDragActiveMockup(false); handleMockupUpload(file); }}
+            onDrop={(file) => {
+              setDragActiveMockup(false);
+              handleMockupUpload(file);
+            }}
             onBrowse={() => mockupInputRef.current?.click()}
             onClear={clearMockup}
             inputRef={mockupInputRef}
@@ -194,14 +248,16 @@ export default function App() {
               <h4 className="font-bold text-slate-900 text-sm">How it works</h4>
               <p className="text-xs text-slate-500 leading-relaxed max-w-2xl">
                 Gemini writes a <strong>Bria instruction</strong> from your two photos, then{" "}
-                <strong>Nano Banana 2</strong> (<code className="text-[11px]">gemini-3.1-flash-image</code>)
-                renders the mockup using that prompt with both images attached. Requires{" "}
+                <strong>Nano Banana 2</strong> (
+                <code className="text-[11px]">gemini-3.1-flash-image</code>) renders the mockup
+                using that prompt with both images attached. Requires{" "}
                 <code className="text-[11px]">GEMINI_API_KEY</code>.
               </p>
             </div>
           </div>
 
           <button
+            type="button"
             onClick={generateMockup}
             disabled={!canGenerate}
             className={`w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-8 py-3.5 text-sm font-semibold rounded-xl text-white shadow-md transition-all ${
@@ -268,7 +324,12 @@ export default function App() {
                   />
                   <div className="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/60 to-transparent p-3 opacity-0 group-hover:opacity-100 transition-opacity flex justify-end gap-2">
                     <button
-                      onClick={() => setModalImage(result.imageUrl!)}
+                      type="button"
+                      onClick={() => {
+                        if (result.imageUrl) {
+                          setModalImage(result.imageUrl);
+                        }
+                      }}
                       className="p-2 rounded-lg bg-white/20 text-white backdrop-blur-xs hover:bg-white/30 cursor-pointer"
                       title="Expand preview"
                     >
@@ -296,10 +357,10 @@ export default function App() {
                   </div>
                 )}
 
-                {mockupPreview && (
+                {mockupPreview && productPreview && (
                   <div className="grid grid-cols-2 gap-4">
                     <CompareThumb label="Original mockup" src={mockupPreview} />
-                    <CompareThumb label="Your product" src={productPreview!} />
+                    <CompareThumb label="Your product" src={productPreview} />
                   </div>
                 )}
               </div>
@@ -308,27 +369,34 @@ export default function App() {
         </section>
       </main>
 
-      <AnimatePresence>
-        {modalImage && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4"
-            onClick={() => setModalImage(null)}
+      {modalImage && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Expanded mockup preview"
+          className={`fixed inset-0 z-50 flex items-center justify-center p-4 ${
+            modalClosing ? "animate-modal-fade-out" : "animate-modal-fade-in"
+          }`}
+        >
+          <button
+            type="button"
+            aria-label="Close preview"
+            className="absolute inset-0 bg-black/90 backdrop-blur-md"
+            onClick={closeModal}
+          />
+          <div
+            className={`relative max-w-5xl w-full ${
+              modalClosing ? "animate-modal-scale-out" : "animate-modal-scale-in"
+            }`}
           >
-            <motion.div
-              initial={{ scale: 0.95 }}
-              animate={{ scale: 1 }}
-              exit={{ scale: 0.95 }}
-              className="max-w-5xl w-full"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <img src={modalImage} alt="Expanded mockup" className="max-h-[85vh] object-contain w-full rounded-xl" />
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            <img
+              src={modalImage}
+              alt="Expanded mockup"
+              className="max-h-[85vh] object-contain w-full rounded-xl"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -376,7 +444,8 @@ function UploadPanel({
         </p>
       </div>
 
-      <div
+      <section
+        aria-label={`${title} upload area`}
         className={`flex-1 border-2 border-dashed rounded-xl p-4 flex flex-col items-center justify-center min-h-[220px] transition-all ${
           dragActive ? "border-blue-500 bg-blue-50/20" : "border-slate-200 hover:border-slate-300"
         }`}
@@ -384,7 +453,9 @@ function UploadPanel({
         onDragLeave={onDragLeave}
         onDrop={(e) => {
           e.preventDefault();
-          if (e.dataTransfer.files?.[0]) onDrop(e.dataTransfer.files[0]);
+          if (e.dataTransfer.files?.[0]) {
+            onDrop(e.dataTransfer.files[0]);
+          }
         }}
       >
         <input
@@ -393,7 +464,9 @@ function UploadPanel({
           accept="image/*"
           className="hidden"
           onChange={(e) => {
-            if (e.target.files?.[0]) onChange(e.target.files[0]);
+            if (e.target.files?.[0]) {
+              onChange(e.target.files[0]);
+            }
           }}
         />
 
@@ -414,8 +487,13 @@ function UploadPanel({
         ) : (
           <div className="w-full flex flex-col items-center space-y-4">
             <div className="relative rounded-lg overflow-hidden border border-slate-200 max-h-[180px] bg-slate-50">
-              <img src={preview} alt={title} className="object-contain w-full h-full max-h-[180px]" />
+              <img
+                src={preview}
+                alt={title}
+                className="object-contain w-full h-full max-h-[180px]"
+              />
               <button
+                type="button"
                 onClick={onClear}
                 className="absolute top-2 right-2 p-1.5 bg-white/90 border border-slate-200 rounded-full text-rose-500 hover:bg-rose-500 hover:text-white cursor-pointer"
                 title="Remove image"
@@ -429,7 +507,7 @@ function UploadPanel({
             </div>
           </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }

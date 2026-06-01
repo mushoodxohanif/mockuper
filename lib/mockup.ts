@@ -5,10 +5,7 @@ export interface UploadFile {
   mimetype: string;
 }
 
-const NANO_BANANA_MODELS = [
-  "gemini-3.1-flash-image",
-  "gemini-2.5-flash-image",
-] as const;
+const NANO_BANANA_MODELS = ["gemini-3.1-flash-image", "gemini-2.5-flash-image"] as const;
 
 let aiInstance: GoogleGenAI | null = null;
 
@@ -47,7 +44,7 @@ function extractImageFromGeminiResponse(response: {
 
 async function buildBriaInstruction(
   mockupFile: UploadFile,
-  productFile: UploadFile
+  productFile: UploadFile,
 ): Promise<string> {
   const ai = getAIInstance();
   const response = await ai.models.generateContent({
@@ -92,7 +89,7 @@ Return ONLY JSON: {"instruction": "..."}`,
 async function runNanoBanana(
   productFile: UploadFile,
   mockupFile: UploadFile,
-  instruction: string
+  instruction: string,
 ): Promise<string> {
   const ai = getAIInstance();
   const contents = [
@@ -133,7 +130,7 @@ async function runNanoBanana(
 
 export async function generateMockup(
   productFile: UploadFile,
-  mockupFile: UploadFile
+  mockupFile: UploadFile,
 ): Promise<{ image: string; instruction: string }> {
   const instruction = await buildBriaInstruction(mockupFile, productFile);
   console.log(`[Mockup] Bria instruction:\n${instruction}`);
