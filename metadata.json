@@ -1,6 +1,6 @@
 {
   "name": "Product Mockup Replacer",
-  "description": "Replace products inside mockup scenes using in-scene AI editing with product reference images.",
+  "description": "Replace products in mockup scenes using Bria instruction + Nano Banana 2 (Gemini).",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

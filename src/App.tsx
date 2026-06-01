@@ -12,23 +12,22 @@ import {
   Maximize2,
   FileImage,
   Info,
-  Target,
 } from "lucide-react";
-import { MockupResult, ProcessingMethod } from "./types";
+import { MockupResult } from "./types";
 
 export default function App() {
   const [productFile, setProductFile] = useState<File | null>(null);
   const [productPreview, setProductPreview] = useState<string | null>(null);
   const [mockupFile, setMockupFile] = useState<File | null>(null);
   const [mockupPreview, setMockupPreview] = useState<string | null>(null);
-  const [method, setMethod] = useState<ProcessingMethod>("precise");
-  const [result, setResult] = useState<MockupResult>({
+  const emptyResult = (): MockupResult => ({
     imageUrl: null,
     loading: false,
     error: null,
     elapsedTime: null,
-    method: null,
+    instruction: null,
   });
+  const [result, setResult] = useState<MockupResult>(emptyResult);
   const [modalImage, setModalImage] = useState<string | null>(null);
 
   const productInputRef = useRef<HTMLInputElement>(null);
@@ -42,7 +41,7 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = () => setProductPreview(reader.result as string);
     reader.readAsDataURL(file);
-    setResult({ imageUrl: null, loading: false, error: null, elapsedTime: null, method: null });
+    setResult(emptyResult());
   };
 
   const handleMockupUpload = (file: File) => {
@@ -53,7 +52,7 @@ export default function App() {
       setMockupPreview(reader.result as string);
     };
     reader.readAsDataURL(file);
-    setResult({ imageUrl: null, loading: false, error: null, elapsedTime: null, method: null });
+    setResult(emptyResult());
   };
 
   const clearProduct = () => {
@@ -71,7 +70,7 @@ export default function App() {
   const generateMockup = async () => {
     if (!productFile || !mockupFile) return;
     const startTime = Date.now();
-    setResult({ imageUrl: null, loading: true, error: null, elapsedTime: 0, method });
+    setResult({ ...emptyResult(), loading: true, elapsedTime: 0 });
 
     const interval = setInterval(() => {
       setResult((prev) => ({
@@ -84,7 +83,6 @@ export default function App() {
       const formData = new FormData();
       formData.append("product", productFile);
       formData.append("mockup", mockupFile);
-      formData.append("method", method);
 
       const response = await fetch("/api/process/mockup", {
         method: "POST",
@@ -105,17 +103,15 @@ export default function App() {
         loading: false,
         error: null,
         elapsedTime: finalTime,
-        method: data.method ?? method,
+        instruction: data.instruction ?? null,
       });
     } catch (e: any) {
       clearInterval(interval);
       const finalTime = Number(((Date.now() - startTime) / 1000).toFixed(1));
       setResult({
-        imageUrl: null,
-        loading: false,
+        ...emptyResult(),
         error: e.message || "Failed to generate mockup.",
         elapsedTime: finalTime,
-        method: null,
       });
     }
   };
@@ -133,7 +129,7 @@ export default function App() {
             <div>
               <h1 className="text-lg font-bold tracking-tight text-slate-900">Mockuper</h1>
               <p className="text-[11px] text-slate-500 font-medium">
-                Replace placeholder products in mockups with Bria AI
+                Bria instruction + Nano Banana 2
               </p>
             </div>
           </div>
@@ -150,8 +146,8 @@ export default function App() {
             Swap the dummy product for your real product
           </h2>
           <p className="text-xs sm:text-sm text-slate-300 leading-relaxed mt-3 max-w-2xl">
-            Upload your product photo and a mockup scene (e.g. a hand holding a placeholder product). Scene
-            replace edits the mockup in place so your product appears naturally in that photograph.
+            Upload your product and a mockup scene. We generate a detailed Bria instruction from both images,
+            then run Nano Banana 2 with that prompt — the same flow as gemini.google.com.
           </p>
         </section>
 
@@ -195,31 +191,14 @@ export default function App() {
               <Info className="w-5 h-5" />
             </div>
             <div className="space-y-1">
-              <h4 className="font-bold text-slate-900 text-sm">Placement method</h4>
+              <h4 className="font-bold text-slate-900 text-sm">How it works</h4>
               <p className="text-xs text-slate-500 leading-relaxed max-w-2xl">
-                <strong>Scene replace (recommended)</strong> swaps the product inside your mockup photo using your
-                product as reference — no cutout-and-paste overlay. <strong>Lifestyle placement</strong> generates a new
-                product shot from the mockup and may change how the product looks.
+                Gemini writes a <strong>Bria instruction</strong> from your two photos, then{" "}
+                <strong>Nano Banana 2</strong> (<code className="text-[11px]">gemini-3.1-flash-image</code>)
+                renders the mockup using that prompt with both images attached. Requires{" "}
+                <code className="text-[11px]">GEMINI_API_KEY</code>.
               </p>
             </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <MethodOption
-              selected={method === "precise"}
-              onSelect={() => setMethod("precise")}
-              title="Scene replace"
-              description="In-scene product swap in your mockup (not a cutout overlay). Requires GEMINI_API_KEY."
-              icon={<Target className="w-4 h-4" />}
-              recommended
-            />
-            <MethodOption
-              selected={method === "lifestyle"}
-              onSelect={() => setMethod("lifestyle")}
-              title="Lifestyle placement"
-              description="Regenerates product appearance from mockup — not verbatim."
-              icon={<Sparkles className="w-4 h-4" />}
-            />
           </div>
 
           <button
@@ -241,11 +220,9 @@ export default function App() {
             <div>
               <h3 className="font-bold text-slate-900 text-sm">Result</h3>
               <p className="text-[10px] text-slate-400">
-                {result.method === "precise"
-                  ? "Product replaced inside the mockup scene"
-                  : result.method === "lifestyle"
-                    ? "AI-generated product shot (appearance may differ)"
-                    : "Your generated mockup will appear here"}
+                {result.imageUrl
+                  ? "Rendered with Nano Banana 2"
+                  : "Your generated mockup will appear here"}
               </p>
             </div>
             {result.elapsedTime !== null && !result.loading && (
@@ -262,7 +239,7 @@ export default function App() {
                 <div className="w-8 h-8 rounded-full border-3 border-blue-600 border-t-transparent animate-spin" />
                 <div className="text-center">
                   <p className="text-sm font-semibold text-slate-800">
-                    {method === "precise" ? "Replacing product in the mockup scene..." : "Generating lifestyle shot..."}
+                    Building Bria instruction, then Nano Banana 2…
                   </p>
                   <p className="text-xs font-mono text-blue-600 mt-1">{result.elapsedTime}s</p>
                 </div>
@@ -307,6 +284,17 @@ export default function App() {
                     </a>
                   </div>
                 </div>
+
+                {result.instruction && (
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                      Bria instruction
+                    </p>
+                    <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap">
+                      {result.instruction}
+                    </p>
+                  </div>
+                )}
 
                 {mockupPreview && (
                   <div className="grid grid-cols-2 gap-4">
@@ -443,45 +431,6 @@ function UploadPanel({
         )}
       </div>
     </div>
-  );
-}
-
-function MethodOption({
-  selected,
-  onSelect,
-  title,
-  description,
-  icon,
-  recommended = false,
-}: {
-  selected: boolean;
-  onSelect: () => void;
-  title: string;
-  description: string;
-  icon: ReactNode;
-  recommended?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`text-left p-4 rounded-xl border transition-all cursor-pointer ${
-        selected
-          ? "border-blue-500 bg-blue-50/50 shadow-sm"
-          : "border-slate-200 hover:border-slate-300 bg-white"
-      }`}
-    >
-      <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-        <span className={selected ? "text-blue-600" : "text-slate-500"}>{icon}</span>
-        {title}
-        {recommended && (
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded">
-            Recommended
-          </span>
-        )}
-      </div>
-      <p className="text-xs text-slate-500 mt-1 leading-relaxed">{description}</p>
-    </button>
   );
 }
 
