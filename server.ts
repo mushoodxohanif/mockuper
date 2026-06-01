@@ -3,448 +3,404 @@ import path from "path";
 import multer from "multer";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
-import dotenv from "dotenv";
-
-dotenv.config();
 
 const app = express();
 const PORT = 3000;
+const BRIA_ENGINE = "https://engine.prod.bria-api.com";
+const BRIA_USER_AGENT = "BriaPlatform/APIdocs/LLMsAgent";
 
-// Setup multer in-memory storage, 20MB max file size
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 }
+  limits: { fileSize: 20 * 1024 * 1024 },
 });
 
-// JSON parsing with expanded limits for high-res base64 images
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// Helper function to fetch images and convert to base64
-async function downloadToBase64(url: string): Promise<string> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch image from URL: ${url}. Status: ${response.status}`);
+function getBriaApiKey(): string {
+  const key = process.env.BRIA_API_KEY;
+  if (!key) {
+    throw new Error("BRIA_API_KEY environment variable is required");
   }
-  const arrayBuffer = await response.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  return `data:image/png;base64,${buffer.toString("base64")}`;
+  return key;
 }
 
-// Lazy client-side Gemini critique and prompter
+function briaAuthHeaders(apiKey: string): Record<string, string> {
+  return {
+    api_token: apiKey,
+    "User-Agent": BRIA_USER_AGENT,
+  };
+}
+
+function briaHeaders(apiKey: string): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    ...briaAuthHeaders(apiKey),
+  };
+}
+
+function fileToRawBase64(file: Express.Multer.File): string {
+  return file.buffer.toString("base64");
+}
+
+function fileToDataUrl(file: Express.Multer.File): string {
+  return `data:${file.mimetype};base64,${fileToRawBase64(file)}`;
+}
+
+const GEMINI_IMAGE_MODELS = [
+  "gemini-2.5-flash-image",
+  "gemini-3.1-flash-image",
+] as const;
+
+const SCENE_REPLACE_PROMPT = `Image 1 is the mockup lifestyle scene (the photograph to edit in place).
+Image 2 is the exact product reference — the only source of truth for product appearance.
+
+Replace the focal/placeholder product in Image 1 with the product from Image 2.
+
+Requirements:
+- Match Image 2 exactly: shape, materials, grain/texture, color, stitching, logos, debossing, hardware, and all branding text.
+- Integrate naturally into the scene: correct perspective, scale, lighting, shadows, and realistic interaction with hands or props. It must look photographed in this scene — NOT a background-removed cutout pasted on top.
+- Keep Image 1's scene as inspiration: preserve hand pose, background, props, and camera angle unless a minimal adjustment is required for realism.
+- Do not invent product details absent from Image 2. Do not leave the original placeholder product visible.`;
+
+async function downloadToBase64(url: string, apiKey: string): Promise<string> {
+  const headers = url.includes("bria.ai")
+    ? briaAuthHeaders(apiKey)
+    : { "User-Agent": BRIA_USER_AGENT };
+  const isTempAsset = url.includes("temp.bria.ai");
+  const maxAttempts = isTempAsset ? 20 : 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await fetch(url, { headers });
+    if (response.ok) {
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      const contentType = response.headers.get("content-type") || "image/png";
+      return `data:${contentType};base64,${buffer.toString("base64")}`;
+    }
+
+    if (isTempAsset && (response.status === 403 || response.status === 404) && attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      continue;
+    }
+
+    throw new Error(`Failed to fetch image from URL: ${url}. Status: ${response.status}`);
+  }
+
+  throw new Error(`Failed to fetch image from URL: ${url}`);
+}
+
+async function pollBriaJob(
+  statusUrl: string,
+  apiKey: string,
+  label: string,
+  maxAttempts = 60,
+  delayMs = 2000
+): Promise<any> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+    const statusRes = await fetch(statusUrl, {
+      headers: briaHeaders(apiKey),
+    });
+
+    if (!statusRes.ok) {
+      console.error(`[${label}] Status poll attempt ${attempt} failed: ${statusRes.status}`);
+      continue;
+    }
+
+    const statusData = await statusRes.json() as any;
+    const status = String(statusData.status || "").toUpperCase();
+    console.log(`[${label}] Poll attempt ${attempt}: ${status}`);
+
+    if (status === "COMPLETED") {
+      return statusData;
+    }
+
+    if (status === "ERROR" || status === "FAILED" || status === "FAILURE") {
+      throw new Error(`${label} job failed: ${JSON.stringify(statusData)}`);
+    }
+  }
+
+  throw new Error(`${label} timed out while waiting for completion`);
+}
+
+function extractImageUrl(payload: any): string | null {
+  if (!payload) return null;
+
+  if (typeof payload.result_url === "string") return payload.result_url;
+  if (typeof payload.url === "string") return payload.url;
+  if (payload.result?.image_url) return payload.result.image_url;
+  if (payload.data?.url) return payload.data.url;
+
+  const nestedResult = payload.result;
+  if (Array.isArray(nestedResult)) {
+    const first = nestedResult[0];
+    if (Array.isArray(first) && typeof first[0] === "string") return first[0];
+    if (typeof first === "string") return first;
+  }
+
+  return null;
+}
+
+async function callBriaEndpoint(
+  endpoint: string,
+  body: Record<string, unknown>,
+  apiKey: string,
+  label: string,
+  sync = false
+): Promise<string> {
+  const response = await fetch(`${BRIA_ENGINE}${endpoint}`, {
+    method: "POST",
+    headers: briaHeaders(apiKey),
+    body: JSON.stringify({ ...body, sync }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`${label} rejected request (${response.status}): ${errorText}`);
+  }
+
+  const result = await response.json() as any;
+  let imageUrl: string | null = null;
+
+  if (result.status_url) {
+    const completed = await pollBriaJob(result.status_url, apiKey, label);
+    imageUrl = extractImageUrl(completed);
+  }
+
+  if (!imageUrl) {
+    imageUrl = extractImageUrl(result);
+  }
+
+  if (!imageUrl) {
+    throw new Error(`${label} did not return an image URL: ${JSON.stringify(result)}`);
+  }
+
+  return imageUrl;
+}
+
 let aiInstance: GoogleGenAI | null = null;
 function getAIInstance(): GoogleGenAI {
   if (!aiInstance) {
     const key = process.env.GEMINI_API_KEY;
     if (!key) {
-      throw new Error("GEMINI_API_KEY environment variable is required");
+      throw new Error("GEMINI_API_KEY is required for scene replace mode");
     }
     aiInstance = new GoogleGenAI({ apiKey: key });
   }
   return aiInstance;
 }
 
-// Helper to describe mockup image using Gemini in one rich, visual paragraph
-async function generatePromptFromMockup(mockupFile: Express.Multer.File): Promise<string> {
+function extractImageFromGeminiResponse(response: {
+  candidates?: Array<{ content?: { parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> } }>;
+}): string {
+  for (const candidate of response.candidates ?? []) {
+    for (const part of candidate.content?.parts ?? []) {
+      if (part.inlineData?.data) {
+        const mime = part.inlineData.mimeType || "image/png";
+        return `data:${mime};base64,${part.inlineData.data}`;
+      }
+    }
+  }
+  throw new Error("Model response did not include an image");
+}
+
+async function buildReplaceInstruction(
+  mockupFile: Express.Multer.File,
+  productFile: Express.Multer.File
+): Promise<string> {
   const ai = getAIInstance();
-  const base64Str = mockupFile.buffer.toString("base64");
-  const promptText = `
-You are an expert design and advertising art director. Analyze this background/mockup image and write a highly detailed, descriptive, single-paragraph prompt (under 60 words and strictly no introductory or concluding remarks) that describes the scene's layout, platform (if any), colors, surface, furniture, studio lighting, perspective, and style – suitable for an AI image generator to recreate this exact background scene matching the product placement context.
-`;
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
     contents: [
       {
         inlineData: {
           mimeType: mockupFile.mimetype,
-          data: base64Str
-        }
+          data: fileToRawBase64(mockupFile),
+        },
       },
-      promptText
-    ]
+      {
+        inlineData: {
+          mimeType: productFile.mimetype,
+          data: fileToRawBase64(productFile),
+        },
+      },
+      `Image 1 is the mockup lifestyle scene. Image 2 is the exact replacement product.
+
+Write one instruction for an in-scene product swap inside image 1 (NOT a cutout overlay).
+
+Requirements:
+- Name the object to replace in image 1.
+- Describe image 2's product in exhaustive detail so the replacement matches exactly (shape, materials, texture, color, stitching, logos, text, hardware).
+- Require natural in-scene integration: perspective, scale, lighting, shadows, and hand interaction.
+- Forbid background removal, flat paste-on overlays, cutout stickers, or leaving the original product visible.
+- Keep background, props, and composition from image 1.
+
+Return ONLY JSON: {"instruction": "..."}`,
+    ],
+    config: { responseMimeType: "application/json" },
   });
-  return response.text?.trim() || "Resting in a modern photo studio setting with soft layout lighting.";
+
+  const parsed = JSON.parse(response.text || "{}") as { instruction?: string };
+  if (!parsed.instruction?.trim()) {
+    throw new Error("Could not build a product replacement instruction");
+  }
+
+  return parsed.instruction.trim();
 }
 
-// Route to process Picsart Mockup Placement
-app.post("/api/process/picsart", upload.fields([
-  { name: "product", maxCount: 1 },
-  { name: "mockup", maxCount: 1 }
-]), async (req: express.Request, res: express.Response) => {
-  try {
-    const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
-    const productFile = files?.product?.[0];
-    const mockupFile = files?.mockup?.[0];
-
-    if (!productFile || !mockupFile) {
-      res.status(400).json({ error: "Missing required product or mockup files." });
-      return;
-    }
-
-    const apiKey = process.env.PICSART_API_KEY || "paat-NtzMTcHOjLpszrhx1lfr0Llf5TX";
-
-    // Build standard multipart request based on correct removebg documentation
-    const formData = new FormData();
-    const productBlob = new Blob([productFile.buffer], { type: productFile.mimetype });
-    formData.append("image", productBlob, productFile.originalname);
-    formData.append("output_type", "cutout");
-    formData.append("bg_blur", "0");
-    formData.append("scale", "fit");
-    formData.append("auto_center", "false");
-    formData.append("stroke_size", "0");
-    formData.append("stroke_color", "FFFFFF");
-    formData.append("stroke_opacity", "100");
-    formData.append("shadow", "disabled");
-    formData.append("shadow_opacity", "20");
-    formData.append("shadow_blur", "50");
-    formData.append("model", "urn:air:picsart:model:picsart:sod@10");
-    formData.append("format", "PNG");
-
-    const response = await fetch("https://api.picsart.io/tools/1.0/removebg", {
-      method: "POST",
-      headers: {
-        "accept": "application/json",
-        "x-picsart-api-key": apiKey
+async function runGeminiSceneReplace(
+  productFile: Express.Multer.File,
+  mockupFile: Express.Multer.File
+): Promise<string> {
+  const ai = getAIInstance();
+  const contents = [
+    {
+      inlineData: {
+        mimeType: mockupFile.mimetype,
+        data: fileToRawBase64(mockupFile),
       },
-      body: formData
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      res.status(response.status).json({
-        error: `Picsart API rejected transaction. Status: ${response.status}`,
-        details: errorText
-      });
-      return;
-    }
-
-    const result = await response.json() as any;
-    if (result.status !== "success" || !result.data?.url) {
-      res.status(500).json({
-        error: "Picsart returned empty output or error status.",
-        details: JSON.stringify(result)
-      });
-      return;
-    }
-
-    // Download resulting cutout image and return base64
-    const base64Data = await downloadToBase64(result.data.url);
-    res.json({ image: base64Data });
-
-  } catch (error: any) {
-    console.error("Picsart routing error:", error);
-    res.status(500).json({
-      error: "Critical failure in processing Picsart API request.",
-      details: error.message || String(error)
-    });
-  }
-});
-
-// Route to process Photoroom Mockup Placement
-app.post("/api/process/photoroom", upload.fields([
-  { name: "product", maxCount: 1 },
-  { name: "mockup", maxCount: 1 }
-]), async (req: express.Request, res: express.Response) => {
-  try {
-    const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
-    const productFile = files?.product?.[0];
-    const mockupFile = files?.mockup?.[0];
-
-    if (!productFile || !mockupFile) {
-      res.status(400).json({ error: "Missing required product or mockup files." });
-      return;
-    }
-
-    const apiKey = process.env.PHOTOROOM_API_KEY || "sk_pr_default_71a0ec561a8c7572cb6be791d8f315490947595e";
-
-    // Build standard multipart request based on correct segment cURL documentation
-    const formData = new FormData();
-    const productBlob = new Blob([productFile.buffer], { type: productFile.mimetype });
-    formData.append("image_file", productBlob, productFile.originalname);
-
-    const mockupBlob = new Blob([mockupFile.buffer], { type: mockupFile.mimetype });
-    formData.append("background_image", mockupBlob, mockupFile.originalname);
-    
-    // Add correct SDK query configuration forms
-    formData.append("format", "png");
-
-    const response = await fetch("https://sdk.photoroom.com/v1/segment", {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey
-      },
-      body: formData
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      res.status(response.status).json({
-        error: `Photoroom API rejected transaction. Status: ${response.status}`,
-        details: errorText
-      });
-      return;
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const base64Data = `data:image/png;base64,${buffer.toString("base64")}`;
-    res.json({ image: base64Data });
-
-  } catch (error: any) {
-    console.error("Photoroom routing error:", error);
-    res.status(500).json({
-      error: "Critical failure in processing Photoroom API request.",
-      details: error.message || String(error)
-    });
-  }
-});
-
-// Route to process Bria AI Mockup Placement
-app.post("/api/process/bria", upload.fields([
-  { name: "product", maxCount: 1 },
-  { name: "mockup", maxCount: 1 }
-]), async (req: express.Request, res: express.Response) => {
-  try {
-    const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
-    const productFile = files?.product?.[0];
-    const mockupFile = files?.mockup?.[0];
-
-    if (!productFile || !mockupFile) {
-      res.status(400).json({ error: "Missing required product or mockup files." });
-      return;
-    }
-
-    const apiKey = process.env.BRIA_API_KEY || "f368007f829c469cb10541b24cc41639";
-
-    // Set fallback prompt verbatim from the docs
-    let prompt = "Resting on a light pink circular platform placed on a bright red floor in a photo studio. The background is a vivid red wall with subtle vertical lines. Surrounding the platform are numerous 3D red poppy flowers in varying sizes. Sliced and whole grapefruits are arranged around the base of the platform, adding fresh color contrast. Lit evenly by soft studio lighting. Shot from a front angle.";
-
-    // Automatically analyze mockup background image to construct a perfect prompt
-    if (process.env.GEMINI_API_KEY) {
-      try {
-        prompt = await generatePromptFromMockup(mockupFile);
-        console.log("[Bria AI] Dynamically generated background prompt:", prompt);
-      } catch (geminiError) {
-        console.error("[Bria AI] Failed to generate dynamic prompt with Gemini, falling back to visual default.", geminiError);
-      }
-    }
-
-    // Convert product image buffer directly into base64 data URL
-    const productBase64 = `data:${productFile.mimetype};base64,${productFile.buffer.toString("base64")}`;
-
-    // Build Bria AI v2 JSON request body
-    const requestBody = {
-      image: productBase64,
-      prompt: prompt,
-      mode: "high_control"
-    };
-
-    const response = await fetch("https://engine.prod.bria-api.com/v2/image/edit/replace_background", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "api_token": apiKey
-      },
-      body: JSON.stringify(requestBody)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      res.status(response.status).json({
-        error: `Bria AI API rejected transaction. Status: ${response.status}`,
-        details: errorText
-      });
-      return;
-    }
-
-    const result = await response.json() as any;
-    let resultUrl = result.result_url || result.url || result.result || (result.data && result.data.url);
-
-    // If the image URL is not returned immediately (e.g. status 202 with status_url is returned)
-    if (!resultUrl && result.status_url) {
-      console.log(`[Bria AI] Background placement job accepted. Polling status_url...`);
-      let attempts = 0;
-      const maxAttempts = 15;
-      const delayMs = 2000;
-
-      while (attempts < maxAttempts) {
-        attempts++;
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-
-        const statusRes = await fetch(result.status_url, {
-          headers: {
-            "api_token": apiKey
-          }
-        });
-
-        if (statusRes.ok) {
-          const statusData = await statusRes.json() as any;
-          console.log(`[Bria AI] Polling attempt ${attempts}: status is ${statusData.status}`);
-          
-          if (statusData.status === "COMPLETED" && statusData.result?.image_url) {
-            resultUrl = statusData.result.image_url;
-            break;
-          } else if (statusData.status === "failure" || statusData.status === "FAILED") {
-            throw new Error(`Bria AI background replacement job failed internally: ${JSON.stringify(statusData)}`);
-          }
-        } else {
-          console.error(`[Bria AI] Failed to retrieve status on attempt ${attempts}. Status: ${statusRes.status}`);
-        }
-      }
-    }
-
-    if (!resultUrl) {
-      res.status(500).json({
-        error: "Bria AI did not return a valid result image URL.",
-        details: JSON.stringify(result)
-      });
-      return;
-    }
-
-    const base64Data = await downloadToBase64(resultUrl);
-    res.json({ image: base64Data });
-
-  } catch (error: any) {
-    console.error("Bria AI routing error:", error);
-    res.status(500).json({
-      error: "Critical failure in processing Bria AI API request.",
-      details: error.message || String(error)
-    });
-  }
-});
-
-// Route to perform Gemini Critique of the comparison results
-app.post("/api/critique", async (req: express.Request, res: express.Response) => {
-  try {
-    const { picsartImg, photoroomImg, briaImg, originalProductImg, originalMockupImg } = req.body;
-
-    if (!process.env.GEMINI_API_KEY) {
-      res.status(400).json({ error: "Gemini API key is not configured in environment variables." });
-      return;
-    }
-
-    const ai = getAIInstance();
-
-    // Use gemini-2.5-flash for rapid, rich layout critique
-    const prompt = `
-You are an expert AI Graphics and Product Marketing Assessor. Analyze these three compared mockup insertion results and output a structured JSON model with ratings and textual feedback for Picsart, Photoroom, and Bria AI:
-
-Review factors:
-1. Shading, lighting integration, shadow realism.
-2. Edge clipping, blending, masking quality, transparency artifacting.
-3. Object placement, perspective matching, scaling.
-4. Color temperature and color correction consistency.
-
-YOUR RESPONSE MUST BE A VALID JSON STRING ONLY. DO NOT EMBED IN MARKDOWN TRIPLE BACKTICKS. JUST OUTPUT THE PLAIN JSON OBJECT:
-{
-  "scores": {
-    "picsart": 8.5,
-    "photoroom": 9.2,
-    "bria": 7.8
-  },
-  "verdict": "Which service overall is the best and why in details.",
-  "reviews": {
-    "picsart": {
-      "masking": "edge blend review text",
-      "lighting": "lighting consistency text",
-      "perspective": "scaling alignment text",
-      "summary": "Pros and cons text"
     },
-    "photoroom": {
-      "masking": "edge blend review text",
-      "lighting": "lighting consistency text",
-      "perspective": "scaling alignment text",
-      "summary": "Pros and cons text"
+    {
+      inlineData: {
+        mimeType: productFile.mimetype,
+        data: fileToRawBase64(productFile),
+      },
     },
-    "bria": {
-      "masking": "edge blend review text",
-      "lighting": "lighting consistency text",
-      "perspective": "scaling alignment text",
-      "summary": "Pros and cons text"
+    { text: SCENE_REPLACE_PROMPT },
+  ];
+
+  let lastError: Error | null = null;
+  for (const model of GEMINI_IMAGE_MODELS) {
+    try {
+      console.log(`[Scene Replace] Trying Gemini model: ${model}`);
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        config: { responseModalities: ["IMAGE"] },
+      });
+      return extractImageFromGeminiResponse(response);
+    } catch (error: any) {
+      lastError = error;
+      console.warn(`[Scene Replace] ${model} failed:`, error.message);
     }
+  }
+
+  throw lastError ?? new Error("Gemini scene replace failed");
+}
+
+async function runBriaSceneReplace(
+  productFile: Express.Multer.File,
+  mockupFile: Express.Multer.File,
+  apiKey: string
+): Promise<string> {
+  const instruction = await buildReplaceInstruction(mockupFile, productFile);
+  console.log(`[Scene Replace] Bria instruction: ${instruction}`);
+
+  const imageUrl = await callBriaEndpoint(
+    "/v2/image/edit/replace_object_by_text",
+    { image: fileToDataUrl(mockupFile), instruction },
+    apiKey,
+    "Scene Product Replace",
+    false
+  );
+
+  return downloadToBase64(imageUrl, apiKey);
+}
+
+async function runInSceneReplace(
+  productFile: Express.Multer.File,
+  mockupFile: Express.Multer.File,
+  apiKey: string
+): Promise<string> {
+  try {
+    return await runGeminiSceneReplace(productFile, mockupFile);
+  } catch (geminiError: any) {
+    console.warn(
+      `[Scene Replace] Gemini failed (${geminiError.message}), falling back to Bria in-scene edit`
+    );
+    return runBriaSceneReplace(productFile, mockupFile, apiKey);
   }
 }
-Keep feedback extremely constructive and analytical.
-`;
 
-    // Package contents
-    const contents: any[] = [];
-    
-    // Auxiliary helper for image conversion (stripping mime prefixes for Gemini ingestion)
-    const toPart = (base64Str: string) => {
-      const match = base64Str.match(/^data:image\/([a-zA-Z+]+);base64,(.+)$/);
-      if (match) {
-        return {
-          inlineData: {
-            mimeType: `image/${match[1]}`,
-            data: match[2]
-          }
-        };
-      }
-      return null;
-    };
+async function runLifestyleShotByImage(
+  productFile: Express.Multer.File,
+  mockupFile: Express.Multer.File,
+  apiKey: string
+): Promise<string> {
+  const imageUrl = await callBriaEndpoint(
+    "/v1/product/lifestyle_shot_by_image",
+    {
+      file: fileToRawBase64(productFile),
+      ref_image_file: [fileToRawBase64(mockupFile)],
+      placement_type: "original",
+      ref_image_influence: 0.85,
+      enhance_ref_image: false,
+      force_rmbg: true,
+      num_results: 1,
+      original_quality: true,
+    },
+    apiKey,
+    "Lifestyle Product Shot",
+    true
+  );
 
-    if (originalProductImg) {
-      const part = toPart(originalProductImg);
-      if (part) contents.push(part);
+  return downloadToBase64(imageUrl, apiKey);
+}
+
+const mockupUpload = upload.fields([
+  { name: "product", maxCount: 1 },
+  { name: "mockup", maxCount: 1 },
+]);
+
+app.post("/api/process/mockup", mockupUpload, async (req, res) => {
+  try {
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+    const productFile = files?.product?.[0];
+    const mockupFile = files?.mockup?.[0];
+
+    if (!productFile || !mockupFile) {
+      res.status(400).json({ error: "Missing required product or mockup files." });
+      return;
     }
-    if (originalMockupImg) {
-      const part = toPart(originalMockupImg);
-      if (part) contents.push(part);
-    }
-    if (picsartImg) {
-      const part = toPart(picsartImg);
-      if (part) contents.push(part);
-    }
-    if (photoroomImg) {
-      const part = toPart(photoroomImg);
-      if (part) contents.push(part);
-    }
-    if (briaImg) {
-      const part = toPart(briaImg);
-      if (part) contents.push(part);
+
+    const apiKey = getBriaApiKey();
+    const method = String(req.body?.method || "precise");
+
+    if (method === "precise") {
+      const image = await runInSceneReplace(productFile, mockupFile, apiKey);
+      res.json({ image, method: "precise" });
+      return;
     }
 
-    contents.push(prompt);
-
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: contents,
-      config: {
-        responseMimeType: "application/json"
-      }
-    });
-
-    const parsedJson = JSON.parse(response.text || "{}");
-    res.json(parsedJson);
-
+    const image = await runLifestyleShotByImage(productFile, mockupFile, apiKey);
+    res.json({ image, method: "lifestyle" });
   } catch (error: any) {
-    console.error("Gemini Critique error:", error);
+    console.error("Mockup processing error:", error);
     res.status(500).json({
-      error: "Could not compile Gemini comparison critique.",
-      details: error.message || String(error)
+      error: error.message || "Failed to generate mockup",
     });
   }
 });
 
-// Setup Dev & Production Assets Flow
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
-      appType: "spa"
+      appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.get("*", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[OK] Server listening smoothly on http://localhost:${PORT}`);
+    console.log(`[OK] Server listening on http://localhost:${PORT}`);
   });
 }
 
