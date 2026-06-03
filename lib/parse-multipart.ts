@@ -1,6 +1,8 @@
 import type { GenerateMode, UploadFile } from "./mockup.js";
+import { formatMegabytes, getMaxFileSizeBytes, getMaxTotalUploadBytes } from "./upload-limits.js";
 
-const MAX_FILE_SIZE = 20 * 1024 * 1024;
+const MAX_FILE_SIZE = getMaxFileSizeBytes();
+const MAX_TOTAL_UPLOAD = getMaxTotalUploadBytes();
 
 export interface MockupUploadFields {
   product?: UploadFile;
@@ -21,7 +23,7 @@ function getFormFile(formData: FormData, name: string): File | undefined {
 
 async function fileToUpload(file: File): Promise<UploadFile> {
   if (file.size > MAX_FILE_SIZE) {
-    throw new Error("File exceeds 20MB limit");
+    throw new Error(`File exceeds ${formatMegabytes(MAX_FILE_SIZE)} MB limit`);
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
@@ -43,6 +45,13 @@ export async function parseMockupMultipart(req: Request): Promise<MockupUploadFi
   const mockup = getFormFile(formData, "mockup");
   if (mockup) {
     files.mockup = await fileToUpload(mockup);
+  }
+
+  const totalBytes = (files.product?.buffer.length ?? 0) + (files.mockup?.buffer.length ?? 0);
+  if (totalBytes > MAX_TOTAL_UPLOAD) {
+    throw new Error(
+      `Combined upload exceeds ${formatMegabytes(MAX_TOTAL_UPLOAD)} MB (Vercel allows at most 4.5 MB per request)`,
+    );
   }
 
   const modeField = formData.get("mode");

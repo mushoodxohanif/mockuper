@@ -184,7 +184,8 @@ Mockup generation can take 1–3 minutes, so the server must run as a long-lived
 ### Upload constraints
 
 - Image formats: PNG, JPG, WebP (anything with an `image/*` MIME type accepted by the browser).
-- Maximum file size: **20 MB** per image (enforced server-side during multipart parsing).
+- **Self-hosted:** **20 MB** per image (default; override with `MAX_FILE_SIZE_BYTES`).
+- **Vercel:** **2 MB** per image, **~4 MB** combined — Vercel rejects function request bodies over **4.5 MB** (`FUNCTION_PAYLOAD_TOO_LARGE`). The UI loads limits from `GET /api/limits`.
 
 ---
 
@@ -296,6 +297,8 @@ The repo includes `vercel.json` and `api/process/mockup.ts` so Vercel can serve 
 2. Set **`GEMINI_API_KEY`** in the project environment variables.
 3. Set **`APP_URL`** to your production URL (e.g. `https://your-app.vercel.app`).
 4. Redeploy after changing env vars.
+
+**Upload size on Vercel:** Each image must be **≤ 2 MB** (both together **≤ ~4 MB**). This is a platform limit, not configurable on Hobby or Pro.
 
 Mockup generation takes **1–3 minutes**. Configure `maxDuration: 300` in `vercel.json` (requires a **Pro** plan or higher; Hobby is capped at 10s). Set `APP_URL` in production.
 

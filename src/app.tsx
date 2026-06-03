@@ -13,7 +13,15 @@ import {
   Upload,
 } from "lucide-react";
 import { type DragEvent, type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
-import type { GenerateMode, MockupResult } from "./types";
+import type { GenerateMode, MockupResult, UploadLimits } from "./types";
+
+const FALLBACK_LIMITS: UploadLimits = {
+  maxFileSizeBytes: 2 * 1024 * 1024,
+  maxTotalUploadBytes: Math.floor(4.5 * 1024 * 1024 * 0.9),
+  maxFileSizeLabel: "2 MB",
+  maxTotalUploadLabel: "4 MB",
+  hostedOnVercel: true,
+};
 
 export default function App() {
   const [productFile, setProductFile] = useState<File | null>(null);
@@ -67,11 +75,41 @@ export default function App() {
   const mockupInputRef = useRef<HTMLInputElement>(null);
   const [dragActiveProduct, setDragActiveProduct] = useState(false);
   const [dragActiveMockup, setDragActiveMockup] = useState(false);
+  const [uploadLimits, setUploadLimits] = useState<UploadLimits>(FALLBACK_LIMITS);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/limits")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: UploadLimits | null) => {
+        if (data?.maxFileSizeBytes) {
+          setUploadLimits(data);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const validateUpload = (file: File, otherFile: File | null): string | null => {
+    if (!file.type.startsWith("image/")) {
+      return "Please upload an image file (PNG, JPG, or WebP).";
+    }
+    if (file.size > uploadLimits.maxFileSizeBytes) {
+      return `Each image must be ${uploadLimits.maxFileSizeLabel} or smaller.`;
+    }
+    const combined = file.size + (otherFile?.size ?? 0);
+    if (combined > uploadLimits.maxTotalUploadBytes) {
+      return `Both images combined must stay under ${uploadLimits.maxTotalUploadLabel}.`;
+    }
+    return null;
+  };
 
   const handleProductUpload = (file: File) => {
-    if (!file.type.startsWith("image/")) {
+    const error = validateUpload(file, mockupFile);
+    if (error) {
+      setUploadError(error);
       return;
     }
+    setUploadError(null);
     setProductFile(file);
     const reader = new FileReader();
     reader.onload = () => setProductPreview(reader.result as string);
@@ -80,9 +118,12 @@ export default function App() {
   };
 
   const handleMockupUpload = (file: File) => {
-    if (!file.type.startsWith("image/")) {
+    const error = validateUpload(file, productFile);
+    if (error) {
+      setUploadError(error);
       return;
     }
+    setUploadError(null);
     setMockupFile(file);
     const reader = new FileReader();
     reader.onload = () => {
@@ -112,6 +153,14 @@ export default function App() {
     if (!productFile || !mockupFile) {
       return;
     }
+    const sizeError =
+      validateUpload(productFile, mockupFile) ?? validateUpload(mockupFile, productFile);
+    if (sizeError) {
+      setUploadError(sizeError);
+      setResult({ ...emptyResult(), error: sizeError });
+      return;
+    }
+    setUploadError(null);
     const startTime = Date.now();
     setResult({ ...emptyResult(), loading: true, elapsedTime: 0, mode: generateMode });
 
@@ -137,6 +186,11 @@ export default function App() {
       const finalTime = Number(((Date.now() - startTime) / 1000).toFixed(1));
 
       if (!response.ok) {
+        if (response.status === 413) {
+          throw new Error(
+            `Upload too large for this host. Use images under ${uploadLimits.maxFileSizeLabel} each (${uploadLimits.maxTotalUploadLabel} combined).`,
+          );
+        }
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.error || `Request failed with status ${response.status}`);
       }
@@ -197,10 +251,26 @@ export default function App() {
           </p>
         </section>
 
+        {uploadLimits.hostedOnVercel && (
+          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+            Hosted on Vercel: keep each image under {uploadLimits.maxFileSizeLabel} (
+            {uploadLimits.maxTotalUploadLabel} combined). Larger files require self-hosting (
+            <code className="font-mono text-[11px]">bun run start</code>).
+          </p>
+        )}
+
+        {uploadError && (
+          <p className="text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            {uploadError}
+          </p>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <UploadPanel
             step="1"
             title="Product (Subject) Image"
+            maxFileSizeLabel={uploadLimits.maxFileSizeLabel}
             preview={productPreview}
             file={productFile}
             dragActive={dragActiveProduct}
@@ -223,6 +293,7 @@ export default function App() {
           <UploadPanel
             step="2"
             title="Mockup (Background) Scene"
+            maxFileSizeLabel={uploadLimits.maxFileSizeLabel}
             preview={mockupPreview}
             file={mockupFile}
             dragActive={dragActiveMockup}
@@ -437,6 +508,7 @@ export default function App() {
 function UploadPanel({
   step,
   title,
+  maxFileSizeLabel,
   preview,
   file,
   dragActive,
@@ -451,6 +523,7 @@ function UploadPanel({
 }: {
   step: string;
   title: string;
+  maxFileSizeLabel: string;
   preview: string | null;
   file: File | null;
   dragActive: boolean;
@@ -514,7 +587,9 @@ function UploadPanel({
               <p className="text-sm font-medium text-slate-700">
                 Drag & drop or <span className="text-blue-600 font-semibold">browse</span>
               </p>
-              <p className="text-xs text-slate-400 mt-1 font-mono">PNG, JPG, WebP up to 20MB</p>
+              <p className="text-xs text-slate-400 mt-1 font-mono">
+                PNG, JPG, WebP up to {maxFileSizeLabel}
+              </p>
             </div>
           </button>
         ) : (
