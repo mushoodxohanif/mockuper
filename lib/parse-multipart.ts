@@ -8,6 +8,17 @@ export interface MockupUploadFields {
   mode: GenerateMode;
 }
 
+function getFormFile(formData: FormData, name: string): File | undefined {
+  const value = formData.get(name);
+  if (value == null || typeof value === "string") {
+    return undefined;
+  }
+  if (value.size === 0) {
+    return undefined;
+  }
+  return value;
+}
+
 async function fileToUpload(file: File): Promise<UploadFile> {
   if (file.size > MAX_FILE_SIZE) {
     throw new Error("File exceeds 20MB limit");
@@ -24,13 +35,13 @@ export async function parseMockupMultipart(req: Request): Promise<MockupUploadFi
   const formData = await req.formData();
   const files: MockupUploadFields = { mode: "instruction_only" as GenerateMode };
 
-  const product = formData.get("product");
-  if (product instanceof File && product.size > 0) {
+  const product = getFormFile(formData, "product");
+  if (product) {
     files.product = await fileToUpload(product);
   }
 
-  const mockup = formData.get("mockup");
-  if (mockup instanceof File && mockup.size > 0) {
+  const mockup = getFormFile(formData, "mockup");
+  if (mockup) {
     files.mockup = await fileToUpload(mockup);
   }
 
