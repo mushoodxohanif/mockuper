@@ -1,5 +1,6 @@
 import index from "./index.html";
 import { handleMockupRequest } from "./lib/handle-mockup.js";
+import { handleProductEditRequest } from "./lib/handle-product-edit.js";
 
 const PORT = Number(process.env.PORT) || 3000;
 const isDev = process.env.NODE_ENV !== "production";
@@ -10,6 +11,9 @@ const shared = {
   routes: {
     "/api/process/mockup": {
       POST: handleMockupRequest,
+    },
+    "/api/process/product-edit": {
+      POST: handleProductEditRequest,
     },
   },
 };

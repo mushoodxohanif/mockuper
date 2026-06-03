@@ -59,3 +59,39 @@ export async function parseMockupMultipart(req: Request): Promise<MockupUploadFi
 
   return files;
 }
+
+export interface ProductEditUploadFields {
+  product?: UploadFile;
+  instructions: string;
+  mode: GenerateMode;
+}
+
+export async function parseProductEditMultipart(req: Request): Promise<ProductEditUploadFields> {
+  const formData = await req.formData();
+  const files: ProductEditUploadFields = {
+    instructions: "",
+    mode: "instruction_only" as GenerateMode,
+  };
+
+  const product = getFormFile(formData, "product");
+  if (product) {
+    files.product = await fileToUpload(product);
+  }
+
+  const instructionsField = formData.get("instructions");
+  if (typeof instructionsField === "string") {
+    files.instructions = instructionsField.trim();
+  }
+
+  const totalBytes = files.product?.buffer.length ?? 0;
+  if (totalBytes > MAX_TOTAL_UPLOAD) {
+    throw new Error(
+      `Upload exceeds ${formatMegabytes(MAX_TOTAL_UPLOAD)} MB (Vercel allows at most 4.5 MB per request)`,
+    );
+  }
+
+  const modeField = formData.get("mode");
+  files.mode = modeField === "instruction_only" ? "instruction_only" : "full";
+
+  return files;
+}

@@ -1,5 +1,7 @@
 export type GenerateMode = "instruction_only" | "full";
 
+export type Workflow = "mockup" | "product_edit";
+
 export interface UploadLimits {
   maxFileSizeBytes: number;
   maxTotalUploadBytes: number;
@@ -15,4 +17,5 @@ export interface MockupResult {
   elapsedTime: number | null;
   instruction: string | null;
   mode: GenerateMode | null;
+  workflow: Workflow | null;
 }

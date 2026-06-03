@@ -8,6 +8,9 @@
   "functions": {
     "api/process/mockup.ts": {
       "maxDuration": 60
+    },
+    "api/process/product-edit.ts": {
+      "maxDuration": 60
     }
   }
 }

@@ -13,7 +13,7 @@ import {
   Upload,
 } from "lucide-react";
 import { type DragEvent, type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
-import type { GenerateMode, MockupResult, UploadLimits } from "./types";
+import type { GenerateMode, MockupResult, UploadLimits, Workflow } from "./types";
 
 const FALLBACK_LIMITS: UploadLimits = {
   maxFileSizeBytes: 2 * 1024 * 1024,
@@ -24,10 +24,12 @@ const FALLBACK_LIMITS: UploadLimits = {
 };
 
 export default function App() {
+  const [workflow, setWorkflow] = useState<Workflow>("mockup");
   const [productFile, setProductFile] = useState<File | null>(null);
   const [productPreview, setProductPreview] = useState<string | null>(null);
   const [mockupFile, setMockupFile] = useState<File | null>(null);
   const [mockupPreview, setMockupPreview] = useState<string | null>(null);
+  const [editInstructions, setEditInstructions] = useState("");
   const [generateMode, setGenerateMode] = useState<GenerateMode>("full");
   const emptyResult = (): MockupResult => ({
     imageUrl: null,
@@ -36,6 +38,7 @@ export default function App() {
     elapsedTime: null,
     instruction: null,
     mode: null,
+    workflow: null,
   });
   const [result, setResult] = useState<MockupResult>(emptyResult);
   const [modalImage, setModalImage] = useState<string | null>(null);
@@ -149,20 +152,19 @@ export default function App() {
     }
   };
 
-  const generateMockup = async () => {
-    if (!productFile || !mockupFile) {
-      return;
-    }
-    const sizeError =
-      validateUpload(productFile, mockupFile) ?? validateUpload(mockupFile, productFile);
-    if (sizeError) {
-      setUploadError(sizeError);
-      setResult({ ...emptyResult(), error: sizeError });
-      return;
-    }
-    setUploadError(null);
+  const runGeneration = async (
+    endpoint: string,
+    buildFormData: () => FormData,
+    errorFallback: string,
+  ) => {
     const startTime = Date.now();
-    setResult({ ...emptyResult(), loading: true, elapsedTime: 0, mode: generateMode });
+    setResult({
+      ...emptyResult(),
+      loading: true,
+      elapsedTime: 0,
+      mode: generateMode,
+      workflow,
+    });
 
     const interval = setInterval(() => {
       setResult((prev) => ({
@@ -172,14 +174,9 @@ export default function App() {
     }, 100);
 
     try {
-      const formData = new FormData();
-      formData.append("product", productFile);
-      formData.append("mockup", mockupFile);
-      formData.append("mode", generateMode);
-
-      const response = await fetch("/api/process/mockup", {
+      const response = await fetch(endpoint, {
         method: "POST",
-        body: formData,
+        body: buildFormData(),
       });
 
       clearInterval(interval);
@@ -188,7 +185,9 @@ export default function App() {
       if (!response.ok) {
         if (response.status === 413) {
           throw new Error(
-            `Upload too large for this host. Use images under ${uploadLimits.maxFileSizeLabel} each (${uploadLimits.maxTotalUploadLabel} combined).`,
+            workflow === "mockup"
+              ? `Upload too large for this host. Use images under ${uploadLimits.maxFileSizeLabel} each (${uploadLimits.maxTotalUploadLabel} combined).`
+              : `Upload too large for this host. Use an image under ${uploadLimits.maxFileSizeLabel}.`,
           );
         }
         const errorData = await response.json().catch(() => ({}));
@@ -203,20 +202,88 @@ export default function App() {
         elapsedTime: finalTime,
         instruction: data.instruction ?? null,
         mode: data.mode ?? generateMode,
+        workflow,
       });
     } catch (error: unknown) {
       clearInterval(interval);
       const finalTime = Number(((Date.now() - startTime) / 1000).toFixed(1));
-      const message = error instanceof Error ? error.message : "Failed to generate mockup.";
+      const message = error instanceof Error ? error.message : errorFallback;
       setResult({
         ...emptyResult(),
         error: message,
         elapsedTime: finalTime,
+        workflow,
       });
     }
   };
 
-  const canGenerate = Boolean(productFile && mockupFile && !result.loading);
+  const generateMockup = async () => {
+    if (!productFile || !mockupFile) {
+      return;
+    }
+    const sizeError =
+      validateUpload(productFile, mockupFile) ?? validateUpload(mockupFile, productFile);
+    if (sizeError) {
+      setUploadError(sizeError);
+      setResult({ ...emptyResult(), error: sizeError });
+      return;
+    }
+    setUploadError(null);
+    await runGeneration(
+      "/api/process/mockup",
+      () => {
+        const formData = new FormData();
+        formData.append("product", productFile);
+        formData.append("mockup", mockupFile);
+        formData.append("mode", generateMode);
+        return formData;
+      },
+      "Failed to generate mockup.",
+    );
+  };
+
+  const generateProductEdit = async () => {
+    if (!productFile || !editInstructions.trim()) {
+      return;
+    }
+    const sizeError = validateUpload(productFile, null);
+    if (sizeError) {
+      setUploadError(sizeError);
+      setResult({ ...emptyResult(), error: sizeError });
+      return;
+    }
+    setUploadError(null);
+    await runGeneration(
+      "/api/process/product-edit",
+      () => {
+        const formData = new FormData();
+        formData.append("product", productFile);
+        formData.append("instructions", editInstructions.trim());
+        formData.append("mode", generateMode);
+        return formData;
+      },
+      "Failed to process product edit.",
+    );
+  };
+
+  const handleGenerate = () => {
+    if (workflow === "mockup") {
+      void generateMockup();
+    } else {
+      void generateProductEdit();
+    }
+  };
+
+  const canGenerate =
+    workflow === "mockup"
+      ? Boolean(productFile && mockupFile && !result.loading)
+      : Boolean(productFile && editInstructions.trim() && !result.loading);
+
+  const switchWorkflow = (next: Workflow) => {
+    setWorkflow(next);
+    setUploadError(null);
+    setResult(emptyResult());
+  };
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-800 font-sans flex flex-col antialiased">
@@ -238,17 +305,48 @@ export default function App() {
 
       <main className="flex-1 max-w-5xl w-full mx-auto px-4 py-8 sm:px-6 lg:px-8 space-y-8">
         <section className="bg-linear-to-r from-slate-900 via-blue-950 to-slate-900 rounded-2xl p-6 sm:p-8 text-white border border-slate-800/80">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-500/15 border border-blue-500/20 rounded-full text-xs font-semibold text-blue-200">
-            <Sparkles className="w-3.5 h-3.5 text-blue-300" />
-            Product Mockup Replacer
-          </span>
-          <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight mt-4">
-            Swap the dummy product for your real product
-          </h2>
-          <p className="text-xs sm:text-sm text-slate-300 leading-relaxed mt-3 max-w-2xl">
-            Upload your product and a mockup scene. Generate only the Bria instruction, or run the
-            full pipeline with Nano Banana 2 — same flow as gemini.google.com.
-          </p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            <WorkflowTab
+              active={workflow === "mockup"}
+              onClick={() => switchWorkflow("mockup")}
+              label="Mockup swap"
+            />
+            <WorkflowTab
+              active={workflow === "product_edit"}
+              onClick={() => switchWorkflow("product_edit")}
+              label="Product edit"
+            />
+          </div>
+          {workflow === "mockup" ? (
+            <>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-500/15 border border-blue-500/20 rounded-full text-xs font-semibold text-blue-200">
+                <Sparkles className="w-3.5 h-3.5 text-blue-300" />
+                Product Mockup Replacer
+              </span>
+              <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight mt-4">
+                Swap the dummy product for your real product
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed mt-3 max-w-2xl">
+                Upload your product and a mockup scene. Generate only the Bria instruction, or run
+                the full pipeline with Nano Banana 2 — same flow as gemini.google.com.
+              </p>
+            </>
+          ) : (
+            <>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-violet-500/15 border border-violet-500/20 rounded-full text-xs font-semibold text-violet-200">
+                <FileText className="w-3.5 h-3.5 text-violet-300" />
+                Product Edit
+              </span>
+              <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight mt-4">
+                Edit your product image with natural-language instructions
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed mt-3 max-w-2xl">
+                Upload a product photo and describe what to change. AI writes a Bria instruction
+                that preserves the product&apos;s color, shape, material, and texture — then Nano
+                Banana 2 applies only your requested edits.
+              </p>
+            </>
+          )}
         </section>
 
         {uploadLimits.hostedOnVercel && (
@@ -266,7 +364,9 @@ export default function App() {
           </p>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div
+          className={`grid gap-6 ${workflow === "mockup" ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"}`}
+        >
           <UploadPanel
             step="1"
             title="Product (Subject) Image"
@@ -290,28 +390,59 @@ export default function App() {
             icon={<FileImage className="w-6 h-6" />}
           />
 
-          <UploadPanel
-            step="2"
-            title="Mockup (Background) Scene"
-            maxFileSizeLabel={uploadLimits.maxFileSizeLabel}
-            preview={mockupPreview}
-            file={mockupFile}
-            dragActive={dragActiveMockup}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragActiveMockup(true);
-            }}
-            onDragLeave={() => setDragActiveMockup(false)}
-            onDrop={(file) => {
-              setDragActiveMockup(false);
-              handleMockupUpload(file);
-            }}
-            onBrowse={() => mockupInputRef.current?.click()}
-            onClear={clearMockup}
-            inputRef={mockupInputRef}
-            onChange={(file) => handleMockupUpload(file)}
-            icon={<Upload className="w-6 h-6" />}
-          />
+          {workflow === "mockup" ? (
+            <UploadPanel
+              step="2"
+              title="Mockup (Background) Scene"
+              maxFileSizeLabel={uploadLimits.maxFileSizeLabel}
+              preview={mockupPreview}
+              file={mockupFile}
+              dragActive={dragActiveMockup}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragActiveMockup(true);
+              }}
+              onDragLeave={() => setDragActiveMockup(false)}
+              onDrop={(file) => {
+                setDragActiveMockup(false);
+                handleMockupUpload(file);
+              }}
+              onBrowse={() => mockupInputRef.current?.click()}
+              onClear={clearMockup}
+              inputRef={mockupInputRef}
+              onChange={(file) => handleMockupUpload(file)}
+              icon={<Upload className="w-6 h-6" />}
+            />
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-lg bg-violet-50 text-violet-700 flex items-center justify-center font-bold text-xs">
+                    2
+                  </span>
+                  <h3 className="font-bold text-slate-900 text-sm">Edit instructions</h3>
+                </div>
+                <p className="text-[10px] font-mono text-slate-400 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-200/60 font-semibold">
+                  REQUIRED
+                </p>
+              </div>
+              <textarea
+                value={editInstructions}
+                onChange={(e) => {
+                  setEditInstructions(e.target.value);
+                  setResult(emptyResult());
+                }}
+                placeholder="e.g. Add credit cards and some cash inside the open wallet. Keep the wallet exactly as it is — same color, leather texture, shape, and stitching."
+                rows={8}
+                className="flex-1 min-h-[220px] w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-400 resize-y"
+              />
+              <p className="text-[11px] text-slate-400 mt-3 leading-relaxed">
+                Describe only what should change. The Bria instruction will lock the product&apos;s
+                intrinsic properties (color, shape, material, texture) unless you explicitly ask to
+                change them.
+              </p>
+            </div>
+          )}
         </div>
 
         <section className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
@@ -322,10 +453,22 @@ export default function App() {
             <div className="space-y-1">
               <h4 className="font-bold text-slate-900 text-sm">What to generate</h4>
               <p className="text-xs text-slate-500 leading-relaxed max-w-2xl">
-                <strong>Instruction only</strong> — Gemini writes the Bria instruction from your
-                photos (copy it to gemini.google.com if you like).{" "}
-                <strong>Instruction + mockup</strong> — same instruction, then Nano Banana 2 renders
-                the final image. Requires <code className="text-[11px]">GEMINI_API_KEY</code>.
+                {workflow === "mockup" ? (
+                  <>
+                    <strong>Instruction only</strong> — Gemini writes the Bria instruction from your
+                    photos (copy it to gemini.google.com if you like).{" "}
+                    <strong>Instruction + image</strong> — same instruction, then Nano Banana 2
+                    renders the final mockup.
+                  </>
+                ) : (
+                  <>
+                    <strong>Instruction only</strong> — Gemini writes a preservation-aware Bria
+                    instruction from your product photo and edit notes.{" "}
+                    <strong>Instruction + image</strong> — same instruction, then Nano Banana 2
+                    edits the product image.
+                  </>
+                )}{" "}
+                Requires <code className="text-[11px]">GEMINI_API_KEY</code>.
               </p>
             </div>
           </div>
@@ -335,13 +478,17 @@ export default function App() {
               selected={generateMode === "instruction_only"}
               onSelect={() => setGenerateMode("instruction_only")}
               title="Instruction only"
-              description="Bria instruction from your two images — no mockup render."
+              description={
+                workflow === "mockup"
+                  ? "Bria instruction from your two images — no render."
+                  : "Bria instruction from product + your edit notes — no render."
+              }
               icon={<FileText className="w-4 h-4" />}
             />
             <GenerateModeOption
               selected={generateMode === "full"}
               onSelect={() => setGenerateMode("full")}
-              title="Instruction + mockup"
+              title={workflow === "mockup" ? "Instruction + mockup" : "Instruction + image"}
               description="Bria instruction, then Nano Banana 2 final image."
               icon={<Sparkles className="w-4 h-4" />}
               recommended
@@ -350,18 +497,22 @@ export default function App() {
 
           <button
             type="button"
-            onClick={generateMockup}
+            onClick={handleGenerate}
             disabled={!canGenerate}
             className={`w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-8 py-3.5 text-sm font-semibold rounded-xl text-white shadow-md transition-all ${
               canGenerate
-                ? "bg-blue-600 hover:bg-blue-700 cursor-pointer"
+                ? workflow === "mockup"
+                  ? "bg-blue-600 hover:bg-blue-700 cursor-pointer"
+                  : "bg-violet-600 hover:bg-violet-700 cursor-pointer"
                 : "bg-slate-200 text-slate-400 cursor-not-allowed"
             }`}
           >
             <Play className="w-4 h-4 fill-current" />
             {generateMode === "instruction_only"
               ? "Generate instruction"
-              : "Generate instruction + mockup"}
+              : workflow === "mockup"
+                ? "Generate instruction + mockup"
+                : "Generate instruction + image"}
           </button>
         </section>
 
@@ -375,10 +526,14 @@ export default function App() {
                     ? "Writing Bria instruction…"
                     : "Bria instruction, then Nano Banana 2…"
                   : result.imageUrl
-                    ? "Instruction + mockup (Nano Banana 2)"
+                    ? result.workflow === "product_edit"
+                      ? "Instruction + edited image (Nano Banana 2)"
+                      : "Instruction + mockup (Nano Banana 2)"
                     : result.instruction
                       ? "Bria instruction ready"
-                      : "Results will appear here"}
+                      : workflow === "product_edit"
+                        ? "Upload a product and add edit instructions"
+                        : "Results will appear here"}
               </p>
             </div>
             {result.elapsedTime !== null && !result.loading && (
@@ -413,7 +568,11 @@ export default function App() {
             )}
 
             {!result.loading && !result.error && !result.imageUrl && !result.instruction && (
-              <p className="text-sm text-slate-400">Upload images and choose what to generate</p>
+              <p className="text-sm text-slate-400">
+                {workflow === "mockup"
+                  ? "Upload images and choose what to generate"
+                  : "Upload a product image, add edit instructions, and generate"}
+              </p>
             )}
 
             {!result.loading && !result.error && (result.imageUrl || result.instruction) && (
@@ -422,7 +581,9 @@ export default function App() {
                   <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-white group shadow-sm">
                     <img
                       src={result.imageUrl}
-                      alt="Generated mockup"
+                      alt={
+                        result.workflow === "product_edit" ? "Edited product" : "Generated mockup"
+                      }
                       className="w-full object-contain max-h-[420px]"
                     />
                     <div className="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/60 to-transparent p-3 opacity-0 group-hover:opacity-100 transition-opacity flex justify-end gap-2">
@@ -440,7 +601,11 @@ export default function App() {
                       </button>
                       <a
                         href={result.imageUrl}
-                        download="mockup-result.png"
+                        download={
+                          result.workflow === "product_edit"
+                            ? "product-edit-result.png"
+                            : "mockup-result.png"
+                        }
                         className="p-2 rounded-lg bg-white/20 text-white backdrop-blur-xs hover:bg-white/30 cursor-pointer"
                         title="Download"
                       >
@@ -461,12 +626,20 @@ export default function App() {
                   </div>
                 )}
 
-                {mockupPreview && productPreview && (
-                  <div className="grid grid-cols-2 gap-4">
-                    <CompareThumb label="Original mockup" src={mockupPreview} />
-                    <CompareThumb label="Your product" src={productPreview} />
-                  </div>
-                )}
+                {productPreview &&
+                  (workflow === "mockup" && mockupPreview ? (
+                    <div className="grid grid-cols-2 gap-4">
+                      <CompareThumb label="Original mockup" src={mockupPreview} />
+                      <CompareThumb label="Your product" src={productPreview} />
+                    </div>
+                  ) : result.imageUrl ? (
+                    <div className="grid grid-cols-2 gap-4">
+                      <CompareThumb label="Original product" src={productPreview} />
+                      <CompareThumb label="Edited result" src={result.imageUrl} />
+                    </div>
+                  ) : (
+                    <CompareThumb label="Original product" src={productPreview} />
+                  ))}
               </div>
             )}
           </div>
@@ -655,6 +828,30 @@ function GenerateModeOption({
         )}
       </div>
       <p className="text-xs text-slate-500 mt-1 leading-relaxed">{description}</p>
+    </button>
+  );
+}
+
+function WorkflowTab({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+        active
+          ? "bg-white text-slate-900 shadow-sm"
+          : "bg-white/10 text-slate-300 hover:bg-white/15 hover:text-white"
+      }`}
+    >
+      {label}
     </button>
   );
 }
