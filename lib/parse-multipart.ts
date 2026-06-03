@@ -1,7 +1,11 @@
+import { compressUploadFile } from "./compress-image.js";
 import type { GenerateMode, UploadFile } from "./mockup.js";
-import { formatMegabytes, getMaxFileSizeBytes, getMaxTotalUploadBytes } from "./upload-limits.js";
+import {
+  formatMegabytes,
+  getMaxTotalUploadBytes,
+  getPerFileUploadBudget,
+} from "./upload-limits.js";
 
-const MAX_FILE_SIZE = getMaxFileSizeBytes();
 const MAX_TOTAL_UPLOAD = getMaxTotalUploadBytes();
 
 export interface MockupUploadFields {
@@ -21,16 +25,13 @@ function getFormFile(formData: FormData, name: string): File | undefined {
   return value;
 }
 
-async function fileToUpload(file: File): Promise<UploadFile> {
-  if (file.size > MAX_FILE_SIZE) {
-    throw new Error(`File exceeds ${formatMegabytes(MAX_FILE_SIZE)} MB limit`);
-  }
-
-  const buffer = Buffer.from(await file.arrayBuffer());
-  return {
-    buffer,
+async function fileToUpload(file: File, fileCount: number): Promise<UploadFile> {
+  const budget = getPerFileUploadBudget(fileCount);
+  const upload: UploadFile = {
+    buffer: Buffer.from(await file.arrayBuffer()),
     mimetype: file.type || "application/octet-stream",
   };
+  return compressUploadFile(upload, budget);
 }
 
 export async function parseMockupMultipart(req: Request): Promise<MockupUploadFields> {
@@ -38,13 +39,15 @@ export async function parseMockupMultipart(req: Request): Promise<MockupUploadFi
   const files: MockupUploadFields = { mode: "instruction_only" as GenerateMode };
 
   const product = getFormFile(formData, "product");
+  const mockup = getFormFile(formData, "mockup");
+  const fileCount = (product ? 1 : 0) + (mockup ? 1 : 0);
+
   if (product) {
-    files.product = await fileToUpload(product);
+    files.product = await fileToUpload(product, fileCount);
   }
 
-  const mockup = getFormFile(formData, "mockup");
   if (mockup) {
-    files.mockup = await fileToUpload(mockup);
+    files.mockup = await fileToUpload(mockup, fileCount);
   }
 
   const totalBytes = (files.product?.buffer.length ?? 0) + (files.mockup?.buffer.length ?? 0);
@@ -75,7 +78,7 @@ export async function parseProductEditMultipart(req: Request): Promise<ProductEd
 
   const product = getFormFile(formData, "product");
   if (product) {
-    files.product = await fileToUpload(product);
+    files.product = await fileToUpload(product, 1);
   }
 
   const instructionsField = formData.get("instructions");

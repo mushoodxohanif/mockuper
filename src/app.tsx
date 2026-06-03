@@ -13,6 +13,7 @@ import {
   Upload,
 } from "lucide-react";
 import { type DragEvent, type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
+import { compressImageFile, formatFileSize } from "./compress-image";
 import type { GenerateMode, MockupResult, UploadLimits, Workflow } from "./types";
 
 const FALLBACK_LIMITS: UploadLimits = {
@@ -22,6 +23,13 @@ const FALLBACK_LIMITS: UploadLimits = {
   maxTotalUploadLabel: "4 MB",
   hostedOnVercel: true,
 };
+
+function getPerFileBudget(limits: UploadLimits, fileCount: number): number {
+  if (fileCount <= 1) {
+    return Math.min(limits.maxFileSizeBytes, limits.maxTotalUploadBytes);
+  }
+  return Math.min(limits.maxFileSizeBytes, Math.floor(limits.maxTotalUploadBytes / fileCount));
+}
 
 export default function App() {
   const [workflow, setWorkflow] = useState<Workflow>("mockup");
@@ -80,6 +88,8 @@ export default function App() {
   const [dragActiveMockup, setDragActiveMockup] = useState(false);
   const [uploadLimits, setUploadLimits] = useState<UploadLimits>(FALLBACK_LIMITS);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [compressingUpload, setCompressingUpload] = useState(false);
+  const [compressionNotice, setCompressionNotice] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/limits")
@@ -92,51 +102,111 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  const validateUpload = (file: File, otherFile: File | null): string | null => {
+  const validateImageType = (file: File): string | null => {
     if (!file.type.startsWith("image/")) {
       return "Please upload an image file (PNG, JPG, or WebP).";
-    }
-    if (file.size > uploadLimits.maxFileSizeBytes) {
-      return `Each image must be ${uploadLimits.maxFileSizeLabel} or smaller.`;
-    }
-    const combined = file.size + (otherFile?.size ?? 0);
-    if (combined > uploadLimits.maxTotalUploadBytes) {
-      return `Both images combined must stay under ${uploadLimits.maxTotalUploadLabel}.`;
     }
     return null;
   };
 
-  const handleProductUpload = (file: File) => {
-    const error = validateUpload(file, mockupFile);
-    if (error) {
-      setUploadError(error);
-      return;
-    }
-    setUploadError(null);
-    setProductFile(file);
+  const setFilePreview = (file: File, setPreview: (url: string | null) => void) => {
     const reader = new FileReader();
-    reader.onload = () => setProductPreview(reader.result as string);
+    reader.onload = () => setPreview(reader.result as string);
     reader.readAsDataURL(file);
-    setResult(emptyResult());
   };
 
-  const handleMockupUpload = (file: File) => {
-    const error = validateUpload(file, productFile);
-    if (error) {
-      setUploadError(error);
+  const prepareImageForUpload = async (file: File, otherFile: File | null): Promise<File> => {
+    const fileCount = otherFile ? 2 : 1;
+    const budget = getPerFileBudget(uploadLimits, fileCount);
+    const { file: prepared, wasCompressed, originalSize } = await compressImageFile(file, budget);
+    if (wasCompressed) {
+      setCompressionNotice(
+        `Compressed ${file.name} from ${formatFileSize(originalSize)} to ${formatFileSize(prepared.size)} for upload.`,
+      );
+    }
+    return prepared;
+  };
+
+  const handleProductUpload = async (file: File) => {
+    const typeError = validateImageType(file);
+    if (typeError) {
+      setUploadError(typeError);
       return;
     }
+
     setUploadError(null);
-    setMockupFile(file);
-    const reader = new FileReader();
-    reader.onload = () => {
-      setMockupPreview(reader.result as string);
-    };
-    reader.readAsDataURL(file);
-    setResult(emptyResult());
+    setCompressingUpload(true);
+    try {
+      let pairedMockup = mockupFile;
+      const mockupBudget = getPerFileBudget(uploadLimits, 2);
+      if (pairedMockup && pairedMockup.size > mockupBudget) {
+        const {
+          file: resizedMockup,
+          wasCompressed,
+          originalSize,
+        } = await compressImageFile(pairedMockup, mockupBudget);
+        pairedMockup = resizedMockup;
+        setMockupFile(resizedMockup);
+        setFilePreview(resizedMockup, setMockupPreview);
+        if (wasCompressed) {
+          setCompressionNotice(
+            `Compressed mockup from ${formatFileSize(originalSize)} to ${formatFileSize(resizedMockup.size)} so both images fit.`,
+          );
+        }
+      }
+
+      const prepared = await prepareImageForUpload(file, pairedMockup);
+      setProductFile(prepared);
+      setFilePreview(prepared, setProductPreview);
+      setResult(emptyResult());
+    } catch {
+      setUploadError("Could not process that image. Try a different file or a smaller photo.");
+    } finally {
+      setCompressingUpload(false);
+    }
+  };
+
+  const handleMockupUpload = async (file: File) => {
+    const typeError = validateImageType(file);
+    if (typeError) {
+      setUploadError(typeError);
+      return;
+    }
+
+    setUploadError(null);
+    setCompressingUpload(true);
+    try {
+      let pairedProduct = productFile;
+      const productBudget = getPerFileBudget(uploadLimits, 2);
+      if (pairedProduct && pairedProduct.size > productBudget) {
+        const {
+          file: resizedProduct,
+          wasCompressed,
+          originalSize,
+        } = await compressImageFile(pairedProduct, productBudget);
+        pairedProduct = resizedProduct;
+        setProductFile(resizedProduct);
+        setFilePreview(resizedProduct, setProductPreview);
+        if (wasCompressed) {
+          setCompressionNotice(
+            `Compressed product image from ${formatFileSize(originalSize)} to ${formatFileSize(resizedProduct.size)} so both images fit.`,
+          );
+        }
+      }
+
+      const prepared = await prepareImageForUpload(file, pairedProduct);
+      setMockupFile(prepared);
+      setFilePreview(prepared, setMockupPreview);
+      setResult(emptyResult());
+    } catch {
+      setUploadError("Could not process that image. Try a different file or a smaller photo.");
+    } finally {
+      setCompressingUpload(false);
+    }
   };
 
   const clearProduct = () => {
+    setCompressionNotice(null);
     setProductFile(null);
     setProductPreview(null);
     if (productInputRef.current) {
@@ -145,6 +215,7 @@ export default function App() {
   };
 
   const clearMockup = () => {
+    setCompressionNotice(null);
     setMockupFile(null);
     setMockupPreview(null);
     if (mockupInputRef.current) {
@@ -186,8 +257,8 @@ export default function App() {
         if (response.status === 413) {
           throw new Error(
             workflow === "mockup"
-              ? `Upload too large for this host. Use images under ${uploadLimits.maxFileSizeLabel} each (${uploadLimits.maxTotalUploadLabel} combined).`
-              : `Upload too large for this host. Use an image under ${uploadLimits.maxFileSizeLabel}.`,
+              ? `Upload still too large after compression. Try smaller source images (${uploadLimits.maxTotalUploadLabel} combined on this host).`
+              : `Upload still too large after compression. Try a smaller source image.`,
           );
         }
         const errorData = await response.json().catch(() => ({}));
@@ -221,13 +292,6 @@ export default function App() {
     if (!productFile || !mockupFile) {
       return;
     }
-    const sizeError =
-      validateUpload(productFile, mockupFile) ?? validateUpload(mockupFile, productFile);
-    if (sizeError) {
-      setUploadError(sizeError);
-      setResult({ ...emptyResult(), error: sizeError });
-      return;
-    }
     setUploadError(null);
     await runGeneration(
       "/api/process/mockup",
@@ -244,12 +308,6 @@ export default function App() {
 
   const generateProductEdit = async () => {
     if (!productFile || !editInstructions.trim()) {
-      return;
-    }
-    const sizeError = validateUpload(productFile, null);
-    if (sizeError) {
-      setUploadError(sizeError);
-      setResult({ ...emptyResult(), error: sizeError });
       return;
     }
     setUploadError(null);
@@ -350,10 +408,22 @@ export default function App() {
         </section>
 
         {uploadLimits.hostedOnVercel && (
-          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-            Hosted on Vercel: keep each image under {uploadLimits.maxFileSizeLabel} (
-            {uploadLimits.maxTotalUploadLabel} combined). Larger files require self-hosting (
-            <code className="font-mono text-[11px]">bun run start</code>).
+          <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+            Large photos are automatically compressed to {uploadLimits.maxFileSizeLabel} each (
+            {uploadLimits.maxTotalUploadLabel} combined) before upload.
+          </p>
+        )}
+
+        {compressingUpload && (
+          <p className="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
+            Compressing image for upload…
+          </p>
+        )}
+
+        {compressionNotice && !compressingUpload && (
+          <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 flex items-center gap-2">
+            <CheckCircle className="w-4 h-4 shrink-0" />
+            {compressionNotice}
           </p>
         )}
 
@@ -370,7 +440,7 @@ export default function App() {
           <UploadPanel
             step="1"
             title="Product (Subject) Image"
-            maxFileSizeLabel={uploadLimits.maxFileSizeLabel}
+            compressing={compressingUpload}
             preview={productPreview}
             file={productFile}
             dragActive={dragActiveProduct}
@@ -394,7 +464,7 @@ export default function App() {
             <UploadPanel
               step="2"
               title="Mockup (Background) Scene"
-              maxFileSizeLabel={uploadLimits.maxFileSizeLabel}
+              compressing={compressingUpload}
               preview={mockupPreview}
               file={mockupFile}
               dragActive={dragActiveMockup}
@@ -681,7 +751,7 @@ export default function App() {
 function UploadPanel({
   step,
   title,
-  maxFileSizeLabel,
+  compressing,
   preview,
   file,
   dragActive,
@@ -696,7 +766,7 @@ function UploadPanel({
 }: {
   step: string;
   title: string;
-  maxFileSizeLabel: string;
+  compressing: boolean;
   preview: string | null;
   file: File | null;
   dragActive: boolean;
@@ -753,7 +823,10 @@ function UploadPanel({
           <button
             type="button"
             onClick={onBrowse}
-            className="cursor-pointer text-center space-y-3 flex flex-col items-center py-4 w-full"
+            disabled={compressing}
+            className={`text-center space-y-3 flex flex-col items-center py-4 w-full ${
+              compressing ? "cursor-wait opacity-60" : "cursor-pointer"
+            }`}
           >
             <div className="p-3.5 bg-slate-100 rounded-full text-slate-500">{icon}</div>
             <div>
@@ -761,7 +834,7 @@ function UploadPanel({
                 Drag & drop or <span className="text-blue-600 font-semibold">browse</span>
               </p>
               <p className="text-xs text-slate-400 mt-1 font-mono">
-                PNG, JPG, WebP up to {maxFileSizeLabel}
+                PNG, JPG, WebP — large files auto-compressed
               </p>
             </div>
           </button>

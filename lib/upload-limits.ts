@@ -41,3 +41,13 @@ export function formatMegabytes(bytes: number): string {
   const mb = bytes / (1024 * 1024);
   return mb >= 10 ? `${Math.round(mb)}` : mb.toFixed(1);
 }
+
+/** Per-file byte budget so multiple images stay under the total request cap. */
+export function getPerFileUploadBudget(fileCount: number): number {
+  const maxFile = getMaxFileSizeBytes();
+  const maxTotal = getMaxTotalUploadBytes();
+  if (fileCount <= 1) {
+    return Math.min(maxFile, maxTotal);
+  }
+  return Math.min(maxFile, Math.floor(maxTotal / fileCount));
+}

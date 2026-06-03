@@ -20,7 +20,8 @@
     "@google/genai": "^2.4.0",
     "lucide-react": "^0.546.0",
     "react": "^19.0.1",
-    "react-dom": "^19.0.1"
+    "react-dom": "^19.0.1",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
