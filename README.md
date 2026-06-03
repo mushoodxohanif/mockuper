@@ -288,7 +288,20 @@ Error body:
 
 ## Deployment
 
-Build and run the Bun production server on any host that supports long-running processes (Fly.io, Railway, a VPS, etc.):
+### Vercel
+
+The repo includes `vercel.json` and `api/process/mockup.ts` so Vercel can serve the built SPA from `dist/` and run the mockup API as a Bun serverless function. `Bun.serve` in `server.ts` is for local dev and self-hosted production only.
+
+1. Import the project in Vercel (or `bunx vercel deploy`).
+2. Set **`GEMINI_API_KEY`** in the project environment variables.
+3. Set **`APP_URL`** to your production URL (e.g. `https://your-app.vercel.app`).
+4. Redeploy after changing env vars.
+
+Mockup generation takes **1–3 minutes**. Configure `maxDuration: 300` in `vercel.json` (requires a **Pro** plan or higher; Hobby is capped at 10s). Set `APP_URL` in production.
+
+### Self-hosted (Bun server)
+
+For a single long-lived process with no serverless timeout:
 
 ```bash
 bun install
@@ -297,8 +310,6 @@ NODE_ENV=production bun run start
 ```
 
 Set `GEMINI_API_KEY` (and optionally `PORT`, `APP_URL`) in the environment. The server listens on port **3000** by default.
-
-Mockup generation takes 1–3 minutes, so avoid platforms with hard serverless timeouts. A single Bun process serves both the static frontend and the API with no timeout limit you don't configure yourself.
 
 ---
 
