@@ -128,13 +128,20 @@ async function runNanoBanana(
   throw lastError ?? new Error("Nano Banana image generation failed");
 }
 
-export async function generateMockup(
+export type GenerateMode = "instruction_only" | "full";
+
+export async function processMockup(
   productFile: UploadFile,
   mockupFile: UploadFile,
-): Promise<{ image: string; instruction: string }> {
+  mode: GenerateMode,
+): Promise<{ instruction: string; image: string | null }> {
   const instruction = await buildBriaInstruction(mockupFile, productFile);
   console.log(`[Mockup] Bria instruction:\n${instruction}`);
 
+  if (mode === "instruction_only") {
+    return { instruction, image: null };
+  }
+
   const image = await runNanoBanana(productFile, mockupFile, instruction);
-  return { image, instruction };
+  return { instruction, image };
 }

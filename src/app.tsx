@@ -4,6 +4,7 @@ import {
   Clock,
   Download,
   FileImage,
+  FileText,
   Info,
   Maximize2,
   Play,
@@ -12,19 +13,21 @@ import {
   Upload,
 } from "lucide-react";
 import { type DragEvent, type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
-import type { MockupResult } from "./types";
+import type { GenerateMode, MockupResult } from "./types";
 
 export default function App() {
   const [productFile, setProductFile] = useState<File | null>(null);
   const [productPreview, setProductPreview] = useState<string | null>(null);
   const [mockupFile, setMockupFile] = useState<File | null>(null);
   const [mockupPreview, setMockupPreview] = useState<string | null>(null);
+  const [generateMode, setGenerateMode] = useState<GenerateMode>("full");
   const emptyResult = (): MockupResult => ({
     imageUrl: null,
     loading: false,
     error: null,
     elapsedTime: null,
     instruction: null,
+    mode: null,
   });
   const [result, setResult] = useState<MockupResult>(emptyResult);
   const [modalImage, setModalImage] = useState<string | null>(null);
@@ -110,7 +113,7 @@ export default function App() {
       return;
     }
     const startTime = Date.now();
-    setResult({ ...emptyResult(), loading: true, elapsedTime: 0 });
+    setResult({ ...emptyResult(), loading: true, elapsedTime: 0, mode: generateMode });
 
     const interval = setInterval(() => {
       setResult((prev) => ({
@@ -123,6 +126,7 @@ export default function App() {
       const formData = new FormData();
       formData.append("product", productFile);
       formData.append("mockup", mockupFile);
+      formData.append("mode", generateMode);
 
       const response = await fetch("/api/process/mockup", {
         method: "POST",
@@ -139,16 +143,17 @@ export default function App() {
 
       const data = await response.json();
       setResult({
-        imageUrl: data.image,
+        imageUrl: data.image ?? null,
         loading: false,
         error: null,
         elapsedTime: finalTime,
         instruction: data.instruction ?? null,
+        mode: data.mode ?? generateMode,
       });
-    } catch (error) {
+    } catch (error: unknown) {
       clearInterval(interval);
       const finalTime = Number(((Date.now() - startTime) / 1000).toFixed(1));
-      const message = error.message ?? "Failed to generate mockup.";
+      const message = error instanceof Error ? error.message : "Failed to generate mockup.";
       setResult({
         ...emptyResult(),
         error: message,
@@ -187,9 +192,8 @@ export default function App() {
             Swap the dummy product for your real product
           </h2>
           <p className="text-xs sm:text-sm text-slate-300 leading-relaxed mt-3 max-w-2xl">
-            Upload your product and a mockup scene. We generate a detailed Bria instruction from
-            both images, then run Nano Banana 2 with that prompt — the same flow as
-            gemini.google.com.
+            Upload your product and a mockup scene. Generate only the Bria instruction, or run the
+            full pipeline with Nano Banana 2 — same flow as gemini.google.com.
           </p>
         </section>
 
@@ -245,15 +249,32 @@ export default function App() {
               <Info className="w-5 h-5" />
             </div>
             <div className="space-y-1">
-              <h4 className="font-bold text-slate-900 text-sm">How it works</h4>
+              <h4 className="font-bold text-slate-900 text-sm">What to generate</h4>
               <p className="text-xs text-slate-500 leading-relaxed max-w-2xl">
-                Gemini writes a <strong>Bria instruction</strong> from your two photos, then{" "}
-                <strong>Nano Banana 2</strong> (
-                <code className="text-[11px]">gemini-3.1-flash-image</code>) renders the mockup
-                using that prompt with both images attached. Requires{" "}
-                <code className="text-[11px]">GEMINI_API_KEY</code>.
+                <strong>Instruction only</strong> — Gemini writes the Bria instruction from your
+                photos (copy it to gemini.google.com if you like).{" "}
+                <strong>Instruction + mockup</strong> — same instruction, then Nano Banana 2 renders
+                the final image. Requires <code className="text-[11px]">GEMINI_API_KEY</code>.
               </p>
             </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <GenerateModeOption
+              selected={generateMode === "instruction_only"}
+              onSelect={() => setGenerateMode("instruction_only")}
+              title="Instruction only"
+              description="Bria instruction from your two images — no mockup render."
+              icon={<FileText className="w-4 h-4" />}
+            />
+            <GenerateModeOption
+              selected={generateMode === "full"}
+              onSelect={() => setGenerateMode("full")}
+              title="Instruction + mockup"
+              description="Bria instruction, then Nano Banana 2 final image."
+              icon={<Sparkles className="w-4 h-4" />}
+              recommended
+            />
           </div>
 
           <button
@@ -267,7 +288,9 @@ export default function App() {
             }`}
           >
             <Play className="w-4 h-4 fill-current" />
-            Generate Mockup
+            {generateMode === "instruction_only"
+              ? "Generate instruction"
+              : "Generate instruction + mockup"}
           </button>
         </section>
 
@@ -276,9 +299,15 @@ export default function App() {
             <div>
               <h3 className="font-bold text-slate-900 text-sm">Result</h3>
               <p className="text-[10px] text-slate-400">
-                {result.imageUrl
-                  ? "Rendered with Nano Banana 2"
-                  : "Your generated mockup will appear here"}
+                {result.loading
+                  ? generateMode === "instruction_only"
+                    ? "Writing Bria instruction…"
+                    : "Bria instruction, then Nano Banana 2…"
+                  : result.imageUrl
+                    ? "Instruction + mockup (Nano Banana 2)"
+                    : result.instruction
+                      ? "Bria instruction ready"
+                      : "Results will appear here"}
               </p>
             </div>
             {result.elapsedTime !== null && !result.loading && (
@@ -295,7 +324,9 @@ export default function App() {
                 <div className="w-8 h-8 rounded-full border-3 border-blue-600 border-t-transparent animate-spin" />
                 <div className="text-center">
                   <p className="text-sm font-semibold text-slate-800">
-                    Building Bria instruction, then Nano Banana 2…
+                    {generateMode === "instruction_only"
+                      ? "Building Bria instruction…"
+                      : "Building Bria instruction, then Nano Banana 2…"}
                   </p>
                   <p className="text-xs font-mono text-blue-600 mt-1">{result.elapsedTime}s</p>
                 </div>
@@ -310,41 +341,43 @@ export default function App() {
               </div>
             )}
 
-            {!result.loading && !result.error && !result.imageUrl && (
-              <p className="text-sm text-slate-400">Upload images and click Generate Mockup</p>
+            {!result.loading && !result.error && !result.imageUrl && !result.instruction && (
+              <p className="text-sm text-slate-400">Upload images and choose what to generate</p>
             )}
 
-            {result.imageUrl && !result.loading && (
+            {!result.loading && !result.error && (result.imageUrl || result.instruction) && (
               <div className="w-full max-w-2xl space-y-4">
-                <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-white group shadow-sm">
-                  <img
-                    src={result.imageUrl}
-                    alt="Generated mockup"
-                    className="w-full object-contain max-h-[420px]"
-                  />
-                  <div className="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/60 to-transparent p-3 opacity-0 group-hover:opacity-100 transition-opacity flex justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (result.imageUrl) {
-                          setModalImage(result.imageUrl);
-                        }
-                      }}
-                      className="p-2 rounded-lg bg-white/20 text-white backdrop-blur-xs hover:bg-white/30 cursor-pointer"
-                      title="Expand preview"
-                    >
-                      <Maximize2 className="w-4 h-4" />
-                    </button>
-                    <a
-                      href={result.imageUrl}
-                      download="mockup-result.png"
-                      className="p-2 rounded-lg bg-white/20 text-white backdrop-blur-xs hover:bg-white/30 cursor-pointer"
-                      title="Download"
-                    >
-                      <Download className="w-4 h-4" />
-                    </a>
+                {result.imageUrl && (
+                  <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-white group shadow-sm">
+                    <img
+                      src={result.imageUrl}
+                      alt="Generated mockup"
+                      className="w-full object-contain max-h-[420px]"
+                    />
+                    <div className="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/60 to-transparent p-3 opacity-0 group-hover:opacity-100 transition-opacity flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (result.imageUrl) {
+                            setModalImage(result.imageUrl);
+                          }
+                        }}
+                        className="p-2 rounded-lg bg-white/20 text-white backdrop-blur-xs hover:bg-white/30 cursor-pointer"
+                        title="Expand preview"
+                      >
+                        <Maximize2 className="w-4 h-4" />
+                      </button>
+                      <a
+                        href={result.imageUrl}
+                        download="mockup-result.png"
+                        className="p-2 rounded-lg bg-white/20 text-white backdrop-blur-xs hover:bg-white/30 cursor-pointer"
+                        title="Download"
+                      >
+                        <Download className="w-4 h-4" />
+                      </a>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {result.instruction && (
                   <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2">
@@ -509,6 +542,45 @@ function UploadPanel({
         )}
       </section>
     </div>
+  );
+}
+
+function GenerateModeOption({
+  selected,
+  onSelect,
+  title,
+  description,
+  icon,
+  recommended = false,
+}: {
+  selected: boolean;
+  onSelect: () => void;
+  title: string;
+  description: string;
+  icon: ReactNode;
+  recommended?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`text-left p-4 rounded-xl border transition-all cursor-pointer ${
+        selected
+          ? "border-blue-500 bg-blue-50/50 shadow-sm"
+          : "border-slate-200 hover:border-slate-300 bg-white"
+      }`}
+    >
+      <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+        <span className={selected ? "text-blue-600" : "text-slate-500"}>{icon}</span>
+        {title}
+        {recommended && (
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded">
+            Recommended
+          </span>
+        )}
+      </div>
+      <p className="text-xs text-slate-500 mt-1 leading-relaxed">{description}</p>
+    </button>
   );
 }
 
