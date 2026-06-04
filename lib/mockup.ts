@@ -45,8 +45,17 @@ function extractImageFromGeminiResponse(response: {
 async function buildBriaInstruction(
   mockupFile: UploadFile,
   productFile: UploadFile,
+  userInstructions: string,
 ): Promise<string> {
   const ai = getAIInstance();
+  const trimmedNotes = userInstructions.trim();
+  const userNotesBlock = trimmedNotes
+    ? `The user wants this product swap in image 1:
+"""
+${trimmedNotes}
+"""`
+    : `No user swap notes were provided. Identify the product or placeholder in image 1 that image 2 should replace.`;
+
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
     contents: [
@@ -64,9 +73,12 @@ async function buildBriaInstruction(
       },
       `Image 1 is the mockup lifestyle scene. Image 2 is the exact replacement product.
 
+${userNotesBlock}
+
 Write one instruction for an in-scene product swap inside image 1 (NOT a cutout overlay).
 
 Requirements:
+- ${trimmedNotes ? "Follow the user's swap notes above; use them to identify what to replace and any integration details they specified." : "Infer what to replace in image 1 from the scene and how image 2 should integrate (perspective, scale, lighting, hands, etc.)."}
 - Name the object to replace in image 1.
 - Describe image 2's product in exhaustive detail so the replacement matches exactly (shape, materials, texture, color, stitching, logos, text, hardware).
 - Require natural in-scene integration: perspective, scale, lighting, shadows, and hand interaction.
@@ -133,9 +145,10 @@ export type GenerateMode = "instruction_only" | "full";
 export async function processMockup(
   productFile: UploadFile,
   mockupFile: UploadFile,
+  userInstructions: string,
   mode: GenerateMode,
 ): Promise<{ instruction: string; image: string | null }> {
-  const instruction = await buildBriaInstruction(mockupFile, productFile);
+  const instruction = await buildBriaInstruction(mockupFile, productFile, userInstructions);
   console.log(`[Mockup] Bria instruction:\n${instruction}`);
 
   if (mode === "instruction_only") {
@@ -149,8 +162,14 @@ export async function processMockup(
 async function buildBriaInstructionForEdit(
   productFile: UploadFile,
   userInstructions: string,
+  referenceFiles: UploadFile[] = [],
 ): Promise<string> {
   const ai = getAIInstance();
+  const referenceHint =
+    referenceFiles.length > 0
+      ? `\nImages 2 through ${referenceFiles.length + 1} are reference photos supplied by the user. Use them to inform what to add, match, or replicate on or inside the product in image 1 (e.g. specific items, colors, textures, branding, layout). Apply edits only to image 1 — do not paste reference images as flat overlays.\n`
+      : "";
+
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
     contents: [
@@ -160,7 +179,13 @@ async function buildBriaInstructionForEdit(
           data: fileToRawBase64(productFile),
         },
       },
-      `Image 1 is the product photo to edit.
+      ...referenceFiles.map((file) => ({
+        inlineData: {
+          mimeType: file.mimetype,
+          data: fileToRawBase64(file),
+        },
+      })),
+      `Image 1 is the product photo to edit.${referenceHint}
 
 The user wants these changes applied to the product in image 1:
 """
@@ -226,8 +251,13 @@ export async function processProductEdit(
   productFile: UploadFile,
   userInstructions: string,
   mode: GenerateMode,
+  referenceFiles: UploadFile[] = [],
 ): Promise<{ instruction: string; image: string | null }> {
-  const instruction = await buildBriaInstructionForEdit(productFile, userInstructions);
+  const instruction = await buildBriaInstructionForEdit(
+    productFile,
+    userInstructions,
+    referenceFiles,
+  );
   console.log(`[ProductEdit] Bria instruction:\n${instruction}`);
 
   if (mode === "instruction_only") {

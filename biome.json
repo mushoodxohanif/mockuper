@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!!**/dist"]
+    "includes": ["**", "!!**/dist", "!!**/.next"]
   },
   "formatter": {
     "enabled": true,
@@ -24,6 +24,9 @@
       "correctness": {
         "noUnusedImports": "error",
         "noUnusedVariables": "error"
+      },
+      "performance": {
+        "noImgElement": "off"
       },
       "suspicious": {
         "noExplicitAny": "warn"
@@ -50,7 +53,7 @@
       "trailingCommas": "all",
       "arrowParentheses": "always"
     },
-    "globals": ["Bun"]
+    "globals": []
   },
   "css": {
     "parser": {

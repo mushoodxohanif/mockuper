@@ -1,10 +1,12 @@
 node_modules/
+.next/
 build/
-dist/
-src/app.css
 coverage/
 .DS_Store
 *.log
 .env*
 !.env.example
 .vercel
+lib/generated/
+
+/src/generated/prisma

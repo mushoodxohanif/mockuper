@@ -1,6 +1,0 @@
-{
-  "name": "Product Mockup Replacer",
-  "description": "Replace products in mockup scenes using Bria instruction + Nano Banana 2 (Gemini).",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

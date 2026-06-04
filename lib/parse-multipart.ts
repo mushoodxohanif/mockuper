@@ -1,16 +1,13 @@
-import { compressUploadFile } from "./compress-image.js";
-import type { GenerateMode, UploadFile } from "./mockup.js";
-import {
-  formatMegabytes,
-  getMaxTotalUploadBytes,
-  getPerFileUploadBudget,
-} from "./upload-limits.js";
+import { compressUploadFile } from "./compress-image";
+import type { GenerateMode, UploadFile } from "./mockup";
+import { formatMegabytes, getMaxTotalUploadBytes, getPerFileUploadBudget } from "./upload-limits";
 
 const MAX_TOTAL_UPLOAD = getMaxTotalUploadBytes();
 
 export interface MockupUploadFields {
   product?: UploadFile;
   mockup?: UploadFile;
+  instructions: string;
   mode: GenerateMode;
 }
 
@@ -25,6 +22,17 @@ function getFormFile(formData: FormData, name: string): File | undefined {
   return value;
 }
 
+function getFormFiles(formData: FormData, name: string): File[] {
+  const files: File[] = [];
+  for (const value of formData.getAll(name)) {
+    if (value == null || typeof value === "string" || value.size === 0) {
+      continue;
+    }
+    files.push(value);
+  }
+  return files;
+}
+
 async function fileToUpload(file: File, fileCount: number): Promise<UploadFile> {
   const budget = getPerFileUploadBudget(fileCount);
   const upload: UploadFile = {
@@ -36,7 +44,10 @@ async function fileToUpload(file: File, fileCount: number): Promise<UploadFile> 
 
 export async function parseMockupMultipart(req: Request): Promise<MockupUploadFields> {
   const formData = await req.formData();
-  const files: MockupUploadFields = { mode: "instruction_only" as GenerateMode };
+  const files: MockupUploadFields = {
+    instructions: "",
+    mode: "instruction_only" as GenerateMode,
+  };
 
   const product = getFormFile(formData, "product");
   const mockup = getFormFile(formData, "mockup");
@@ -57,6 +68,11 @@ export async function parseMockupMultipart(req: Request): Promise<MockupUploadFi
     );
   }
 
+  const instructionsField = formData.get("instructions");
+  if (typeof instructionsField === "string") {
+    files.instructions = instructionsField.trim();
+  }
+
   const modeField = formData.get("mode");
   files.mode = modeField === "instruction_only" ? "instruction_only" : "full";
 
@@ -65,6 +81,7 @@ export async function parseMockupMultipart(req: Request): Promise<MockupUploadFi
 
 export interface ProductEditUploadFields {
   product?: UploadFile;
+  references: UploadFile[];
   instructions: string;
   mode: GenerateMode;
 }
@@ -72,13 +89,21 @@ export interface ProductEditUploadFields {
 export async function parseProductEditMultipart(req: Request): Promise<ProductEditUploadFields> {
   const formData = await req.formData();
   const files: ProductEditUploadFields = {
+    references: [],
     instructions: "",
     mode: "instruction_only" as GenerateMode,
   };
 
   const product = getFormFile(formData, "product");
+  const referenceInputs = getFormFiles(formData, "references");
+  const fileCount = (product ? 1 : 0) + referenceInputs.length;
+
   if (product) {
-    files.product = await fileToUpload(product, 1);
+    files.product = await fileToUpload(product, fileCount || 1);
+  }
+
+  for (const reference of referenceInputs) {
+    files.references.push(await fileToUpload(reference, fileCount || 1));
   }
 
   const instructionsField = formData.get("instructions");
@@ -86,10 +111,12 @@ export async function parseProductEditMultipart(req: Request): Promise<ProductEd
     files.instructions = instructionsField.trim();
   }
 
-  const totalBytes = files.product?.buffer.length ?? 0;
+  const totalBytes =
+    (files.product?.buffer.length ?? 0) +
+    files.references.reduce((sum, file) => sum + file.buffer.length, 0);
   if (totalBytes > MAX_TOTAL_UPLOAD) {
     throw new Error(
-      `Upload exceeds ${formatMegabytes(MAX_TOTAL_UPLOAD)} MB (Vercel allows at most 4.5 MB per request)`,
+      `Combined upload exceeds ${formatMegabytes(MAX_TOTAL_UPLOAD)} MB (Vercel allows at most 4.5 MB per request)`,
     );
   }
 
@@ -97,4 +124,32 @@ export async function parseProductEditMultipart(req: Request): Promise<ProductEd
   files.mode = modeField === "instruction_only" ? "instruction_only" : "full";
 
   return files;
+}
+
+export interface FeedbackUploadFields {
+  sentiment: "positive" | "negative" | null;
+  comment: string;
+  image?: UploadFile;
+}
+
+export async function parseFeedbackMultipart(req: Request): Promise<FeedbackUploadFields> {
+  const formData = await req.formData();
+
+  const sentimentField = formData.get("sentiment");
+  const sentiment =
+    sentimentField === "positive" || sentimentField === "negative" ? sentimentField : null;
+
+  let comment = "";
+  const commentField = formData.get("comment");
+  if (typeof commentField === "string") {
+    comment = commentField.trim();
+  }
+
+  const imageFile = getFormFile(formData, "image");
+  let image: UploadFile | undefined;
+  if (imageFile) {
+    image = await fileToUpload(imageFile, 1);
+  }
+
+  return { sentiment, comment, image };
 }

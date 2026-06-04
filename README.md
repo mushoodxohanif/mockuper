@@ -15,6 +15,7 @@ The pipeline mirrors the workflow available on [gemini.google.com](https://gemin
 - [Requirements](#requirements)
 - [Getting started](#getting-started)
 - [Environment variables](#environment-variables)
+- [Database (Neon)](#database-neon)
 - [API reference](#api-reference)
 - [Deployment](#deployment)
 - [Project structure](#project-structure)
@@ -102,23 +103,26 @@ Multipart uploads are parsed with the Web `FormData` API. Each file field (`prod
 
 ## Architecture
 
-Mockuper is a single-page React app served by one **Bun** process (`server.ts`). The same server handles the API, frontend assets, and hot reload in development.
+Mockuper is a **Next.js 16** App Router app. The home page is a Server Component that passes cached upload limits to a client workspace; API routes delegate to shared handlers in `lib/`.
 
-| Mode | Frontend | API |
-|------|----------|-----|
-| **Development** (`bun run dev`) | Bun HTML bundler with HMR from `index.html` | `POST /api/process/mockup` on `Bun.serve` |
-| **Production** (`bun run start`) | Static files from `dist/` (built with `bun build`) | Same route on `Bun.serve` |
+| Layer | Role |
+|-------|------|
+| `app/page.tsx` | Server Component — `getUploadLimitsCached()` → `MockuperWorkspace` |
+| `components/*` | Client UI — uploads, generation, results, feedback |
+| `app/api/**/route.ts` | Route handlers — mockup, product-edit, limits, feedback |
+| `lib/` | Gemini pipeline, multipart parsing, Neon usage logging |
 
 ```mermaid
 flowchart TB
-  subgraph client [Browser]
-    UI[React SPA]
+  subgraph next [Next.js App Router]
+    Page["app/page.tsx"]
+    Client["components/mockuper-workspace"]
+    RH["app/api/process/*"]
   end
 
-  subgraph server [Server]
-    API["/api/process/mockup"]
-    Parse[parse-multipart.ts]
-    Pipeline[mockup.ts]
+  subgraph lib [lib]
+    Handlers[handle-mockup / product-edit / feedback]
+    Pipeline[mockup.ts + parse-multipart]
   end
 
   subgraph gemini [Google Gemini]
@@ -126,17 +130,17 @@ flowchart TB
     Image[gemini-3.1-flash-image / gemini-2.5-flash-image]
   end
 
-  UI -->|multipart POST| API
-  API --> Parse
-  Parse --> Pipeline
+  Page -->|initialLimits| Client
+  Client -->|multipart POST| RH
+  RH --> Handlers --> Pipeline
   Pipeline --> Flash
   Flash -->|instruction| Pipeline
   Pipeline --> Image
   Image -->|base64 image| Pipeline
-  Pipeline -->|JSON response| UI
+  Pipeline -->|JSON response| Client
 ```
 
-Mockup generation can take 1–3 minutes, so the server must run as a long-lived process (not a short-lived serverless function).
+Mockup generation can take 1–3 minutes. On Vercel, `maxDuration` is set on the process route handlers (see [Deployment](#deployment)).
 
 ---
 
@@ -146,25 +150,29 @@ Mockup generation can take 1–3 minutes, so the server must run as a long-lived
 
 | Technology | Role |
 |------------|------|
-| **React 19** | UI components and state |
+| **Next.js 16** | App Router, Server Components, Cache Components (PPR) |
+| **React 19** | Client workspace components and state |
 | **TypeScript** | Type safety across frontend and backend |
 | **Biome** | Linting, formatting, and import organization |
-| **Bun** | HTTP server, dev bundler/HMR, and production frontend build |
-| **Tailwind CSS 4** | Styling via `@tailwindcss/cli` (scans components, outputs compiled CSS) |
+| **Tailwind CSS 4** | Styling via PostCSS (`app/globals.css`) |
 | **Lucide React** | Icons |
 
 ### Backend
 
 | Technology | Role |
 |------------|------|
-| **Bun** | HTTP server (`Bun.serve`), dev bundler/HMR, and runtime |
+| **Next.js Route Handlers** | `/api/*` endpoints on Node.js (Vercel Functions locally via `next dev`) |
 | **@google/genai** | Official Google Gemini SDK |
+| **Prisma ORM** | Type-safe access to `usage_events` (Neon via `@prisma/adapter-neon`) |
+| **Sharp** | Server-side image compression before Gemini |
 
 ### Infrastructure
 
 | Technology | Role |
 |------------|------|
 | **Google Gemini API** | Text analysis (Bria instruction) and image generation (Nano Banana 2) |
+| **Neon Postgres** | Usage tracking (prompts, ImgBB URLs, timing, feedback) |
+| **ImgBB** | Temporary public hosting for logged input/output images |
 
 ---
 
@@ -172,7 +180,8 @@ Mockup generation can take 1–3 minutes, so the server must run as a long-lived
 
 ### Runtime
 
-- **[Bun](https://bun.sh)** — required for development and production (`bun run dev`, `bun run start`).
+- **[Bun](https://bun.sh)** — package manager and script runner (`bun install`, `bun run dev`).
+- **Node.js 20+** — used by Next.js under the hood for `next dev` / `next build` / `next start`.
 
 ### API access
 
@@ -199,17 +208,21 @@ cd mockuper
 bun install
 ```
 
+`postinstall` runs `prisma generate` so the typed client in `lib/generated/prisma` is available before `dev` or `build`.
+
 ### 2. Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` and set your Gemini API key:
+Edit `.env` and set at least your Gemini API key. For usage logging (optional but recommended), also set `DATABASE_URL` and `IMGBB_API_KEY` — see [Database (Neon)](#database-neon).
 
 ```env
 GEMINI_API_KEY="your-api-key-here"
 APP_URL="http://localhost:3000"
+DATABASE_URL="postgresql://..."
+IMGBB_API_KEY="your-imgbb-key"
 ```
 
 ### 3. Run locally
@@ -218,21 +231,21 @@ APP_URL="http://localhost:3000"
 bun run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Bun serves the React app with HMR and the mockup API on port 3000.
+Open [http://localhost:3000](http://localhost:3000). Next.js serves the app and API routes on port 3000.
 
 ### Available scripts
 
 | Command | Description |
 |---------|-------------|
-| `bun run dev` | Dev server + Tailwind CSS watch (port 3000) |
-| `bun run build` | Build the React frontend to `dist/` with Bun |
-| `bun run start` | Production server: serves `dist/` + API (run `build` first) |
+| `bun run dev` | Next.js dev server (port 3000) |
+| `bun run build` | Production build (Turbopack) |
+| `bun run start` | Production server (`next start`; run `build` first) |
 | `bun run lint` | Lint and format check with Biome |
 | `bun run lint:fix` | Auto-fix lint issues and format with Biome |
 | `bun run format` | Format all files with Biome |
 | `bun run typecheck` | Typecheck with `tsc --noEmit` |
 | `bun run check` | Run Biome and TypeScript checks |
-| `bun run clean` | Remove the `dist/` directory |
+| `bun run clean` | Remove the `.next/` build cache |
 
 ---
 
@@ -242,6 +255,55 @@ Open [http://localhost:3000](http://localhost:3000). Bun serves the React app wi
 |----------|----------|---------|-------------|
 | `GEMINI_API_KEY` | **Yes** | — | Google Gemini API key. Used by all server-side generation calls. Never exposed to the client. |
 | `APP_URL` | No | `http://localhost:3000` | Public URL of the deployed app. Used for metadata and links. Set to your Vercel domain in production. |
+| `DATABASE_URL` | For usage logging | — | Neon Postgres connection string. Required to persist generation runs and feedback. |
+| `IMGBB_API_KEY` | For usage logging | — | [ImgBB](https://api.imgbb.com/) API key. Input/output images are uploaded here; only URLs are stored in Postgres. |
+
+---
+
+## Database (Neon)
+
+Usage tracking stores one row per generation attempt in `usage_events` (ImgBB image URLs, prompts, timing, errors, and optional feedback). Apply the schema once before enabling logging in the app.
+
+### 1. Create a Neon project
+
+1. Sign in at [neon.tech](https://neon.tech) and create a project (or use an existing one).
+2. Copy the **connection string** from the dashboard (use the pooled or direct URL your deployment needs).
+3. Set `DATABASE_URL` in `.env` (local) and in Vercel project settings (production).
+
+### 2. Run migrations (Prisma)
+
+From the repo root, with `DATABASE_URL` set in `.env`:
+
+```bash
+bun run db:migrate
+```
+
+For local development when you change `prisma/schema.prisma`:
+
+```bash
+bun run db:migrate:dev
+```
+
+This applies migrations in [`prisma/migrations/`](prisma/migrations/). Legacy SQL under [`db/migrations/`](db/migrations/) matches the same schema and is kept for reference only.
+
+**Existing database created from old SQL scripts?** Prisma migrate may report the table already exists. Either use a fresh Neon branch/database, or baseline once:
+
+```bash
+bunx prisma migrate resolve --applied 20250604233400_init_usage_events
+```
+
+### 3. Verify
+
+In the SQL editor or `psql`:
+
+```sql
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'usage_events'
+ORDER BY ordinal_position;
+```
+
+You should see columns for workflow metadata, ImgBB URLs (`product_image_url`, `mockup_image_url`, `reference_image_urls`, `output_image_url`), `duration_ms`, and feedback fields (`feedback_sentiment`, `feedback_comment`, `feedback_submitted_at`).
 
 ---
 
@@ -265,25 +327,62 @@ Generates a product mockup from two uploaded images.
 ```json
 {
   "image": "data:image/png;base64,...",
-  "instruction": "Replace the brown leather handbag on the marble table with..."
+  "instruction": "Replace the brown leather handbag on the marble table with...",
+  "mode": "full",
+  "usageId": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
+
+`usageId` is a UUID for the persisted usage row when `DATABASE_URL` and `IMGBB_API_KEY` are set. It is `null` if logging failed or env vars are missing. Use it with the [feedback endpoint](#post-apiusageidfeedback) below.
 
 **Error responses:**
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing `product` or `mockup` field |
+| `400` | Missing `product` or `mockup` field (no `usageId`) |
 | `405` | Method other than POST |
 | `500` | Gemini API failure, file too large, instruction parse error, or other server error |
 
-Error body:
+Error body (failed runs may still include `usageId` when logging succeeded):
 
 ```json
 {
-  "error": "Human-readable error message"
+  "error": "Human-readable error message",
+  "usageId": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
+
+### `POST /api/usage/:id/feedback`
+
+Attach optional thumbs-up/down feedback to a generation run. `:id` is the `usageId` from a mockup or product-edit response.
+
+**Content-Type:** `application/json`
+
+**Body:**
+
+```json
+{
+  "sentiment": "positive",
+  "comment": "Optional free text (max 2000 characters after trim)"
+}
+```
+
+| Field | Required | Values |
+|-------|----------|--------|
+| `sentiment` | Yes | `positive` or `negative` |
+| `comment` | No | Trimmed string |
+
+**Responses:**
+
+| Status | Body |
+|--------|------|
+| `200` | `{ "ok": true }` |
+| `400` | Invalid body or sentiment |
+| `404` | Unknown `usageId` |
+| `409` | Feedback already submitted for this run |
+| `405` | Non-POST |
+
+Requires `DATABASE_URL`. Feedback is allowed for both successful and failed runs.
 
 ---
 
@@ -291,20 +390,20 @@ Error body:
 
 ### Vercel
 
-The repo includes `vercel.json` and `api/process/mockup.ts` so Vercel can serve the built SPA from `dist/` and run the mockup API as a Bun serverless function. `Bun.serve` in `server.ts` is for local dev and self-hosted production only.
+Vercel auto-detects Next.js. No SPA `rewrites` or static `dist/` output is required.
 
 1. Import the project in Vercel (or `bunx vercel deploy`).
-2. Set **`GEMINI_API_KEY`** in the project environment variables.
-3. Set **`APP_URL`** to your production URL (e.g. `https://your-app.vercel.app`).
-4. Redeploy after changing env vars.
+2. Use **`bun install`** as the install command if prompted (or set it in project settings).
+3. Set **`GEMINI_API_KEY`** in the project environment variables.
+4. Set **`APP_URL`** to your production URL (e.g. `https://your-app.vercel.app`).
+5. For usage logging, set **`DATABASE_URL`** and **`IMGBB_API_KEY`**, run the [migration](#2-run-the-migration), and redeploy.
+6. Redeploy after changing env vars.
 
 **Upload size on Vercel:** Each image must be **≤ 2 MB** (both together **≤ ~4 MB**). This is a platform limit, not configurable on Hobby or Pro.
 
-Mockup generation takes **1–3 minutes**. Configure `maxDuration: 300` in `vercel.json` (requires a **Pro** plan or higher; Hobby is capped at 10s). Set `APP_URL` in production.
+Mockup generation takes **1–3 minutes**. `export const maxDuration = 60` is set on `app/api/process/mockup/route.ts` and `app/api/process/product-edit/route.ts`. Increase to `300` on a **Pro** plan if you need longer runs (Hobby is capped at 10s for serverless).
 
-### Self-hosted (Bun server)
-
-For a single long-lived process with no serverless timeout:
+### Self-hosted
 
 ```bash
 bun install
@@ -320,20 +419,33 @@ Set `GEMINI_API_KEY` (and optionally `PORT`, `APP_URL`) in the environment. The 
 
 ```
 mockuper/
+├── app/
+│   ├── layout.tsx              # Root layout, metadata, globals.css
+│   ├── page.tsx                # Server page — cached limits → workspace
+│   ├── globals.css             # Tailwind 4 source
+│   └── api/
+│       ├── limits/route.ts
+│       ├── process/mockup/route.ts
+│       ├── process/product-edit/route.ts
+│       └── usage/[id]/feedback/route.ts
+├── components/
+│   ├── mockuper-workspace.tsx  # Client orchestration
+│   └── …                       # Uploads, results, feedback, UI helpers
 ├── lib/
-│   ├── mockup.ts           # Bria instruction + Nano Banana pipeline
-│   ├── parse-multipart.ts  # Multipart form parsing
-│   └── handle-mockup.ts    # API route handler
-├── src/
-│   ├── app.tsx             # Main UI: uploads, generation, results
-│   ├── main.tsx            # React entry point
-│   ├── tailwind.css        # Tailwind source (@import, @theme, keyframes)
-│   ├── app.css             # Generated Tailwind output (gitignored)
-│   └── types.ts            # Frontend TypeScript types
-├── server.ts               # Bun.serve — API + frontend (dev and production)
-├── biome.json              # Biome lint and format configuration
-├── metadata.json           # App metadata (name, description)
-├── .env.example            # Environment variable template
+│   ├── mockup.ts               # Bria instruction + Nano Banana pipeline
+│   ├── parse-multipart.ts      # Multipart form parsing
+│   ├── handle-mockup.ts        # Mockup route handler
+│   ├── handle-product-edit.ts
+│   └── upload-limits.ts        # Limits JSON for page + GET /api/limits
+├── types/
+│   └── index.ts                # Shared TypeScript types
+├── db/
+│   └── migrations/
+│       └── 001_usage_events.sql
+├── next.config.ts
+├── postcss.config.mjs
+├── biome.json
+├── .env.example
 └── package.json
 ```
 
@@ -344,5 +456,5 @@ mockuper/
 - **Generation time:** Two sequential Gemini calls typically take 1–3 minutes. The UI shows a loading state and elapsed timer; there is no streaming or partial results.
 - **In-memory uploads:** Images are fully buffered in server memory (up to 20 MB each). High concurrency increases memory pressure.
 - **Model availability:** Image generation depends on Gemini model access. If `gemini-3.1-flash-image` is unavailable, the app falls back to `gemini-2.5-flash-image`; if both fail, the request returns a 500 error.
-- **No persistence:** Generated images are returned inline and not stored. Refreshing the page clears the result unless the user downloads it.
+- **Client-side results:** Generated images are returned inline to the browser; refreshing clears the UI result unless the user downloads it. With usage logging enabled, metadata and ImgBB URLs are stored in Neon (not shown in-app).
 - **No authentication:** The API is open to anyone who can reach the server. Add auth or rate limiting before exposing a public deployment.

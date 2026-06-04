@@ -1,0 +1,31 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model UsageEvent {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  workflow            String
+  mode                String
+  status              String
+  userInstructions    String    @map("user_instructions")
+  briaInstruction     String?   @map("bria_instruction")
+  productImageUrl     String?   @map("product_image_url")
+  mockupImageUrl      String?   @map("mockup_image_url")
+  referenceImageUrls  Json      @default("[]") @map("reference_image_urls") @db.JsonB
+  outputImageUrl      String?   @map("output_image_url")
+  errorMessage        String?   @map("error_message")
+  durationMs          Int       @map("duration_ms")
+  feedbackSentiment   String?   @map("feedback_sentiment")
+  feedbackComment     String?   @map("feedback_comment")
+  feedbackSubmittedAt DateTime? @map("feedback_submitted_at") @db.Timestamptz(6)
+  feedbackImageUrl    String?   @map("feedback_image_url")
+
+  @@index([createdAt(sort: Desc)], map: "usage_events_created_at_idx")
+  @@map("usage_events")
+}

@@ -42,6 +42,27 @@ export function formatMegabytes(bytes: number): string {
   return mb >= 10 ? `${Math.round(mb)}` : mb.toFixed(1);
 }
 
+export type UploadLimitsResponse = {
+  maxFileSizeBytes: number;
+  maxTotalUploadBytes: number;
+  hostedOnVercel: boolean;
+  maxFileSizeLabel: string;
+  maxTotalUploadLabel: string;
+};
+
+export function getUploadLimitsResponse(): UploadLimitsResponse {
+  const maxFileSizeBytes = getMaxFileSizeBytes();
+  const maxTotalUploadBytes = getMaxTotalUploadBytes();
+
+  return {
+    maxFileSizeBytes,
+    maxTotalUploadBytes,
+    hostedOnVercel: isVercelDeployment(),
+    maxFileSizeLabel: `${formatMegabytes(maxFileSizeBytes)} MB`,
+    maxTotalUploadLabel: `${formatMegabytes(maxTotalUploadBytes)} MB`,
+  };
+}
+
 /** Per-file byte budget so multiple images stay under the total request cap. */
 export function getPerFileUploadBudget(fileCount: number): number {
   const maxFile = getMaxFileSizeBytes();

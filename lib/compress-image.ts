@@ -1,6 +1,6 @@
 import sharp from "sharp";
-import type { UploadFile } from "./mockup.js";
-import { formatMegabytes } from "./upload-limits.js";
+import type { UploadFile } from "./mockup";
+import { formatMegabytes } from "./upload-limits";
 
 const OUTPUT_MIME = "image/jpeg";
 const MAX_DIMENSION = 4096;
