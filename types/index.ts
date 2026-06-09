@@ -28,6 +28,22 @@ export type ReferenceImage = {
   preview: string;
 };
 
+export type ImageAnnotationType = "marker" | "selection";
+
+export type ImageAnnotationPoint = {
+  x: number;
+  y: number;
+};
+
+export type ImageAnnotation = {
+  id: string;
+  type: ImageAnnotationType;
+  note: string;
+  x?: number;
+  y?: number;
+  points?: ImageAnnotationPoint[];
+};
+
 export const MAX_REFERENCE_IMAGES = 5;
 
 export function emptyMockupResult(): MockupResult {

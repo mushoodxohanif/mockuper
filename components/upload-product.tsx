@@ -16,6 +16,8 @@ type UploadProductProps = {
   onBrowse: () => void;
   onClear: () => void;
   onChange: (file: File) => void;
+  onPreviewClick?: () => void;
+  annotationCount?: number;
 };
 
 export function UploadProduct({
@@ -30,6 +32,8 @@ export function UploadProduct({
   onBrowse,
   onClear,
   onChange,
+  onPreviewClick,
+  annotationCount,
 }: UploadProductProps) {
   return (
     <DropZone
@@ -47,6 +51,8 @@ export function UploadProduct({
       inputRef={inputRef}
       onChange={onChange}
       icon={<FileImage className="w-6 h-6" />}
+      onPreviewClick={onPreviewClick}
+      annotationCount={annotationCount}
     />
   );
 }

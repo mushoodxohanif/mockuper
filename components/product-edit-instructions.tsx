@@ -27,9 +27,9 @@ export function ProductEditInstructions({ value, onChange }: ProductEditInstruct
         className="flex-1 min-h-[220px] w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-400 resize-y"
       />
       <p className="text-[11px] text-slate-400 mt-3 leading-relaxed">
-        Describe only what should change. The Bria instruction will lock the product&apos;s
-        intrinsic properties (color, shape, material, texture) unless you explicitly ask to change
-        them.
+        Describe what should change, or click your uploaded product image to place markers and
+        region notes. The Bria instruction will lock the product&apos;s intrinsic properties (color,
+        shape, material, texture) unless you explicitly ask to change them.
       </p>
     </div>
   );

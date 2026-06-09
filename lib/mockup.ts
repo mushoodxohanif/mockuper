@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import type { ImageAnnotation } from "@/types";
 
 export interface UploadFile {
   buffer: Buffer;
@@ -159,16 +160,46 @@ export async function processMockup(
   return { instruction, image };
 }
 
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatAnnotationsForPrompt(annotations: ImageAnnotation[]): string {
+  const annotated = annotations.filter((item) => item.note.trim());
+  if (annotated.length === 0) {
+    return "";
+  }
+
+  const lines = annotated.map((annotation, index) => {
+    const note = annotation.note.trim();
+    if (annotation.type === "marker" && annotation.x != null && annotation.y != null) {
+      return `Annotation ${index + 1} (marker at ${formatPercent(annotation.x)} from the left, ${formatPercent(annotation.y)} from the top):
+  "${note}"`;
+    }
+    const pointCount = annotation.points?.length ?? 0;
+    return `Annotation ${index + 1} (free-selected region with ${pointCount} boundary points on the product):
+  "${note}"`;
+  });
+
+  return `
+
+The user placed visual annotations directly on the product image. Treat each note as a precise, localized edit request for that spot or region:
+${lines.join("\n\n")}
+`;
+}
+
 async function buildBriaInstructionForEdit(
   productFile: UploadFile,
   userInstructions: string,
   referenceFiles: UploadFile[] = [],
+  annotations: ImageAnnotation[] = [],
 ): Promise<string> {
   const ai = getAIInstance();
   const referenceHint =
     referenceFiles.length > 0
       ? `\nImages 2 through ${referenceFiles.length + 1} are reference photos supplied by the user. Use them to inform what to add, match, or replicate on or inside the product in image 1 (e.g. specific items, colors, textures, branding, layout). Apply edits only to image 1 — do not paste reference images as flat overlays.\n`
       : "";
+  const annotationHint = formatAnnotationsForPrompt(annotations);
 
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
@@ -190,7 +221,7 @@ async function buildBriaInstructionForEdit(
 The user wants these changes applied to the product in image 1:
 """
 ${userInstructions.trim()}
-"""
+"""${annotationHint}
 
 Write one Bria instruction for an image editor (Nano Banana 2) that applies ONLY the user's requested changes to image 1.
 
@@ -252,11 +283,13 @@ export async function processProductEdit(
   userInstructions: string,
   mode: GenerateMode,
   referenceFiles: UploadFile[] = [],
+  annotations: ImageAnnotation[] = [],
 ): Promise<{ instruction: string; image: string | null }> {
   const instruction = await buildBriaInstructionForEdit(
     productFile,
     userInstructions,
     referenceFiles,
+    annotations,
   );
   console.log(`[ProductEdit] Bria instruction:\n${instruction}`);
 

@@ -10,6 +10,7 @@ export async function handleProductEditRequest(req: Request): Promise<Response> 
   let product: Awaited<ReturnType<typeof parseProductEditMultipart>>["product"];
   let references: Awaited<ReturnType<typeof parseProductEditMultipart>>["references"];
   let instructions: string | undefined;
+  let annotations: Awaited<ReturnType<typeof parseProductEditMultipart>>["annotations"] = [];
   let mode: Awaited<ReturnType<typeof parseProductEditMultipart>>["mode"];
   let startedAt: number | undefined;
 
@@ -18,15 +19,20 @@ export async function handleProductEditRequest(req: Request): Promise<Response> 
     product = parsed.product;
     references = parsed.references;
     instructions = parsed.instructions;
+    annotations = parsed.annotations;
     mode = parsed.mode;
 
     if (!product) {
       return Response.json({ error: "Missing required product image." }, { status: 400 });
     }
 
-    if (!instructions) {
+    const hasAnnotatedNotes = annotations.some((annotation) => annotation.note.trim());
+    if (!instructions && !hasAnnotatedNotes) {
       return Response.json(
-        { error: "Missing edit instructions. Describe what to change on the product." },
+        {
+          error:
+            "Missing edit instructions. Describe what to change on the product or add notes to your image annotations.",
+        },
         { status: 400 },
       );
     }
@@ -37,6 +43,7 @@ export async function handleProductEditRequest(req: Request): Promise<Response> 
       instructions,
       mode,
       references,
+      annotations,
     );
     const durationMs = Date.now() - startedAt;
 

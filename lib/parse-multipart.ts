@@ -1,3 +1,4 @@
+import type { ImageAnnotation } from "@/types";
 import { compressUploadFile } from "./compress-image";
 import type { GenerateMode, UploadFile } from "./mockup";
 import { formatMegabytes, getMaxTotalUploadBytes, getPerFileUploadBudget } from "./upload-limits";
@@ -83,6 +84,7 @@ export interface ProductEditUploadFields {
   product?: UploadFile;
   references: UploadFile[];
   instructions: string;
+  annotations: ImageAnnotation[];
   mode: GenerateMode;
 }
 
@@ -91,6 +93,7 @@ export async function parseProductEditMultipart(req: Request): Promise<ProductEd
   const files: ProductEditUploadFields = {
     references: [],
     instructions: "",
+    annotations: [],
     mode: "instruction_only" as GenerateMode,
   };
 
@@ -111,6 +114,18 @@ export async function parseProductEditMultipart(req: Request): Promise<ProductEd
     files.instructions = instructionsField.trim();
   }
 
+  const annotationsField = formData.get("annotations");
+  if (typeof annotationsField === "string" && annotationsField.trim()) {
+    try {
+      const parsed = JSON.parse(annotationsField) as unknown;
+      if (Array.isArray(parsed)) {
+        files.annotations = parsed.filter(isValidImageAnnotation);
+      }
+    } catch {
+      throw new Error("Invalid annotation data.");
+    }
+  }
+
   const totalBytes =
     (files.product?.buffer.length ?? 0) +
     files.references.reduce((sum, file) => sum + file.buffer.length, 0);
@@ -124,6 +139,33 @@ export async function parseProductEditMultipart(req: Request): Promise<ProductEd
   files.mode = modeField === "instruction_only" ? "instruction_only" : "full";
 
   return files;
+}
+
+function isValidImageAnnotation(value: unknown): value is ImageAnnotation {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const annotation = value as ImageAnnotation;
+  if (typeof annotation.id !== "string" || typeof annotation.note !== "string") {
+    return false;
+  }
+  if (annotation.type === "marker") {
+    return typeof annotation.x === "number" && typeof annotation.y === "number";
+  }
+  if (annotation.type === "selection") {
+    return (
+      Array.isArray(annotation.points) &&
+      annotation.points.length >= 3 &&
+      annotation.points.every(
+        (point) =>
+          point &&
+          typeof point === "object" &&
+          typeof point.x === "number" &&
+          typeof point.y === "number",
+      )
+    );
+  }
+  return false;
 }
 
 export interface FeedbackUploadFields {

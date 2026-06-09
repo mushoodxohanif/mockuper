@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { GenerationControls } from "@/components/generation-controls";
+import { ImageAnnotationEditor } from "@/components/image-annotation-editor";
 import { ImageModal } from "@/components/image-modal";
 import { ProductEditInstructions } from "@/components/product-edit-instructions";
 import { ResultPanel } from "@/components/result-panel";
@@ -20,6 +21,7 @@ import type { UploadLimitsResponse } from "@/lib/upload-limits";
 import {
   emptyMockupResult,
   type GenerateMode,
+  type ImageAnnotation,
   MAX_REFERENCE_IMAGES,
   type MockupResult,
   type ReferenceImage,
@@ -44,6 +46,8 @@ export function MockuperWorkspace({ initialLimits }: MockuperWorkspaceProps) {
   const [result, setResult] = useState<MockupResult>(emptyMockupResult());
   const [modalImage, setModalImage] = useState<string | null>(null);
   const [modalClosing, setModalClosing] = useState(false);
+  const [productAnnotations, setProductAnnotations] = useState<ImageAnnotation[]>([]);
+  const [annotationEditorOpen, setAnnotationEditorOpen] = useState(false);
 
   const productInputRef = useRef<HTMLInputElement>(null);
   const mockupInputRef = useRef<HTMLInputElement>(null);
@@ -131,6 +135,7 @@ export function MockuperWorkspace({ initialLimits }: MockuperWorkspaceProps) {
       }
       setProductFile(prepared);
       setFilePreview(prepared, setProductPreview);
+      setProductAnnotations([]);
       resetResult();
     } catch {
       setUploadError("Could not process that image. Try a different file or a smaller photo.");
@@ -182,6 +187,8 @@ export function MockuperWorkspace({ initialLimits }: MockuperWorkspaceProps) {
     setCompressionNotice(null);
     setProductFile(null);
     setProductPreview(null);
+    setProductAnnotations([]);
+    setAnnotationEditorOpen(false);
     if (productInputRef.current) {
       productInputRef.current.value = "";
     }
@@ -369,8 +376,12 @@ export function MockuperWorkspace({ initialLimits }: MockuperWorkspaceProps) {
     );
   };
 
+  const hasProductEditInstructions = () =>
+    Boolean(editInstructions.trim()) ||
+    productAnnotations.some((annotation) => annotation.note.trim());
+
   const generateProductEdit = async () => {
-    if (!productFile || !editInstructions.trim()) {
+    if (!productFile || !hasProductEditInstructions()) {
       return;
     }
     setUploadError(null);
@@ -383,6 +394,9 @@ export function MockuperWorkspace({ initialLimits }: MockuperWorkspaceProps) {
           formData.append("references", reference.file);
         }
         formData.append("instructions", editInstructions.trim());
+        if (productAnnotations.length > 0) {
+          formData.append("annotations", JSON.stringify(productAnnotations));
+        }
         formData.append("mode", generateMode);
         return formData;
       },
@@ -401,7 +415,7 @@ export function MockuperWorkspace({ initialLimits }: MockuperWorkspaceProps) {
   const canGenerate =
     workflow === "mockup"
       ? Boolean(productFile && mockupFile && !result.loading)
-      : Boolean(productFile && editInstructions.trim() && !result.loading);
+      : Boolean(productFile && hasProductEditInstructions() && !result.loading);
 
   const switchWorkflow = (next: Workflow) => {
     setWorkflow(next);
@@ -444,6 +458,12 @@ export function MockuperWorkspace({ initialLimits }: MockuperWorkspaceProps) {
           onBrowse={() => productInputRef.current?.click()}
           onClear={clearProduct}
           onChange={(file) => void handleProductUpload(file)}
+          onPreviewClick={
+            workflow === "product_edit" && productPreview
+              ? () => setAnnotationEditorOpen(true)
+              : undefined
+          }
+          annotationCount={workflow === "product_edit" ? productAnnotations.length : 0}
         />
 
         {workflow === "mockup" ? (
@@ -529,6 +549,18 @@ export function MockuperWorkspace({ initialLimits }: MockuperWorkspaceProps) {
       />
 
       <ImageModal imageUrl={modalImage} closing={modalClosing} onClose={closeModal} />
+
+      {annotationEditorOpen && productPreview && (
+        <ImageAnnotationEditor
+          imageUrl={productPreview}
+          annotations={productAnnotations}
+          onSave={(annotations) => {
+            setProductAnnotations(annotations);
+            resetResult();
+          }}
+          onClose={() => setAnnotationEditorOpen(false)}
+        />
+      )}
     </main>
   );
 }

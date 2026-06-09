@@ -20,6 +20,8 @@ type DropZoneProps = {
   inputRef: RefObject<HTMLInputElement | null>;
   onChange: (file: File) => void;
   icon: ReactNode;
+  onPreviewClick?: () => void;
+  annotationCount?: number;
 };
 
 export function DropZone({
@@ -39,6 +41,8 @@ export function DropZone({
   inputRef,
   onChange,
   icon,
+  onPreviewClick,
+  annotationCount = 0,
 }: DropZoneProps) {
   const stepBg = accent === "violet" ? "bg-violet-50 text-violet-700" : "bg-blue-50 text-blue-700";
   const dragActiveClass =
@@ -108,12 +112,37 @@ export function DropZone({
           </button>
         ) : (
           <div className="w-full flex flex-col items-center space-y-4">
-            <div className="relative rounded-lg overflow-hidden border border-slate-200 max-h-[180px] bg-slate-50">
-              <img
-                src={preview}
-                alt={title}
-                className="object-contain w-full h-full max-h-[180px]"
-              />
+            <div className="relative rounded-lg overflow-hidden border border-slate-200 max-h-[180px] bg-slate-50 w-full">
+              {onPreviewClick ? (
+                <button
+                  type="button"
+                  onClick={onPreviewClick}
+                  className="block w-full cursor-pointer group"
+                  title="Open annotation editor"
+                >
+                  <img
+                    src={preview}
+                    alt={title}
+                    className="object-contain w-full h-full max-h-[180px] transition-opacity group-hover:opacity-90"
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center bg-slate-900/0 group-hover:bg-slate-900/25 transition-colors">
+                    <span className="opacity-0 group-hover:opacity-100 text-xs font-semibold text-white bg-slate-900/70 px-3 py-1.5 rounded-full transition-opacity">
+                      Click to annotate
+                    </span>
+                  </div>
+                </button>
+              ) : (
+                <img
+                  src={preview}
+                  alt={title}
+                  className="object-contain w-full h-full max-h-[180px]"
+                />
+              )}
+              {annotationCount > 0 && (
+                <span className="absolute bottom-2 left-2 text-[10px] font-semibold text-white bg-violet-600 px-2 py-0.5 rounded-full">
+                  {annotationCount} annotation{annotationCount === 1 ? "" : "s"}
+                </span>
+              )}
               <button
                 type="button"
                 onClick={onClear}
